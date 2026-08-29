@@ -1,0 +1,12 @@
+bin/
+obj/
+*.user
+.vs/
+*.db
+__pycache__/
+*.pyc
+.pytest_cache/
+dist/
+out/
+engine/dist/
+.artifacts/
