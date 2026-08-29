@@ -23,8 +23,11 @@ public static class CoreServices
         services.AddSingleton<IDownloadEngine, RunnerEngine>();
         services.AddSingleton<SiteRegistry>(_ => new SiteRegistry([new TwitterSiteProvider()]));
 
-        services.AddDbContext<GalleryDbContext>(o => o.UseSqlite($"Data Source={paths.DbFile}"));
+        // 适配（对调 brief 中两行的顺序）：AddDbContextFactory 先注册，使 DbContextOptions 为 Singleton——
+        // singleton 工厂捕获 scoped options 会在启用 scope 校验的宿主（Development 默认）构建 DI 时失败；
+        // 两个注册的连接串相同，调序后功能不变。
         services.AddDbContextFactory<GalleryDbContext>(o => o.UseSqlite($"Data Source={paths.DbFile}"));
+        services.AddDbContext<GalleryDbContext>(o => o.UseSqlite($"Data Source={paths.DbFile}"));
 
         services.AddScoped<ISettingsStore, GallerySettingsStore>();
         services.AddScoped<IAccountService, AccountService>();
