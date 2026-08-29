@@ -1,5 +1,6 @@
 using GalleryGUI.Data;
 using GalleryGUI.Engine;
+using GalleryGUI.Services;
 using GalleryGUI.Sites;
 using Microsoft.Data.Sqlite;
 using Microsoft.EntityFrameworkCore;
@@ -57,5 +58,33 @@ public sealed class FakeEngine : IDownloadEngine
     {
         Downloads.Add((plan, cookiesFile, progress));
         return OnDownload?.Invoke(plan, cookiesFile, progress, ct) ?? Task.CompletedTask;
+    }
+}
+
+/// <summary>
+/// 包装测试持有的单连接 DbContext 的 IDbContextFactory（Task 11 落位，供 Task 10 测试复用）。
+/// 每次返回共享同一 SqliteConnection 的新上下文：仍落在同一个 :memory: 库上，但被调用方
+/// （StatsAggregator 等）`await using` 后 dispose 的不是测试持有的 _db 实例，_db 保持可用。
+/// </summary>
+public sealed class SingleDbContextFactory(GalleryDbContext db) : IDbContextFactory<GalleryDbContext>
+{
+    public GalleryDbContext CreateDbContext() =>
+        new(new DbContextOptionsBuilder<GalleryDbContext>().UseSqlite(db.Database.GetDbConnection()).Options);
+}
+
+/// <summary>
+/// 继承 StatsAggregator、覆写 ApplyJobCompletionAsync 只记录不落库（Task 10 的 DownloadQueueService 测试依赖）。
+/// 空注入 base(null!)：覆写路径不会触碰 factory，安全（brief Step 3 括号说明）。
+/// </summary>
+public sealed class FakeStats : StatsAggregator
+{
+    public List<long> AppliedJobIds { get; } = [];
+
+    public FakeStats() : base(null!) { }
+
+    public override Task ApplyJobCompletionAsync(long jobId, CancellationToken ct = default)
+    {
+        AppliedJobIds.Add(jobId);
+        return Task.CompletedTask;
     }
 }
