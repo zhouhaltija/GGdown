@@ -36,6 +36,20 @@ class EventOutput:
         pass
 
 
+class CountingLogHandler(EventHandler):
+    """ERROR 级 gallery-dl 日志计入 failed：output.NullOutput 接口无失败回调，
+    文件失败只走日志通道，故在 log 桥接处补计。"""
+
+    def __init__(self, counters):
+        super().__init__(level=logging.WARNING)
+        self.counters = counters
+
+    def emit(self, record):
+        if record.levelno >= logging.ERROR:
+            self.counters["failed"] += 1
+        super().emit(record)
+
+
 def cmd_whoami(args):
     from sites import twitter
     emit_hello()
@@ -72,7 +86,9 @@ def cmd_download(args):
     config.set(("extractor", args.site), "cookies", args.cookies)  # CLI 参数覆盖，双保险
     counters = {"started": 0, "done": 0, "skipped": 0, "failed": 0}
     output.select = lambda: EventOutput(counters)
-    logging.getLogger("gallery_dl").addHandler(EventHandler(logging.WARNING))
+    # gallery-dl 的 logger（"gallery-dl" 及类别名如 "twitter"）均向 root 传播；
+    # 按库使用时 setup_logging 不会被触发，root 上无冲突 handler
+    logging.getLogger().addHandler(CountingLogHandler(counters))
     for url in spec["urls"]:
         emit("url-start", url=url)
         job.DownloadJob(url).run()
