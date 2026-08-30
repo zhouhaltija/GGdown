@@ -80,6 +80,15 @@ public sealed class AccountService(
             return new(account, $"引擎错误：{e.Message}");
         }
         await db.SaveChangesAsync(ct);
+        // B7 审查 Important 修复：account 可能是游离实体（IAccountQueryService 产自独立 factory 上下文 +
+        // AsNoTracking，设置页"重新验证"路径），SaveChanges 对其零变更、结果不落库——
+        // 再按 Id ExecuteUpdateAsync 持久化四属性（与上方停用更新、DownloadQueueService 标记 Invalid 同模式）。
+        // 导入路径的新实体此时已被 SaveChanges 写入并取得 Id，本句命中同一行重写相同值，幂等无副作用。
+        await db.Accounts.Where(a => a.Id == account.Id).ExecuteUpdateAsync(s => s
+            .SetProperty(a => a.Status, account.Status)
+            .SetProperty(a => a.ScreenName, account.ScreenName)
+            .SetProperty(a => a.DisplayName, account.DisplayName)
+            .SetProperty(a => a.VerifiedAt, account.VerifiedAt), ct);
         return account.Status == AccountStatus.Ok
             ? new(account)
             : new(account, "Cookie 无效或已过期，请重新导出");

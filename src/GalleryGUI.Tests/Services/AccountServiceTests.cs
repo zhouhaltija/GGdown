@@ -72,4 +72,46 @@ public class AccountServiceTests : IDisposable
         Assert.Single(all.Where(a => a.IsActive));
         Assert.Equal(second.Account.Id, all.Single(a => a.IsActive).Id);
     }
+
+    // ---- B7 审查 Important 回归：VerifyAsync 对游离实体（GetActiveAsync 产出的 AsNoTracking 实例）须落库 ----
+
+    /// <summary>复刻 IAccountQueryService.GetActiveAsync 的产出方式：独立 factory 上下文 + AsNoTracking → 游离实体。</summary>
+    private Account GetDetachedActiveAccount()
+    {
+        var factory = new SingleDbContextFactory(_t.Item2);
+        using var queryDb = factory.CreateDbContext();
+        return queryDb.Accounts.AsNoTracking().Single(a => a.SiteId == "twitter" && a.IsActive);
+    }
+
+    [Fact]
+    public async Task Verify_persists_invalid_status_for_detached_entity()
+    {
+        await _svc.ImportCookiesAsync("twitter", MakeCookiesFile()); // 先导入，取得活动账号
+        _engine.WhoAmIError = new AuthException("cookie 已过期");
+        var result = await _svc.VerifyAsync(GetDetachedActiveAccount());
+        Assert.False(result.Ok);
+        Assert.Equal(AccountStatus.Invalid, result.Account.Status);
+        // 游离实例的改写必须落库：AsNoTracking 重读断言（SaveChanges 对游离实体是空操作，修复前此处失败）
+        var reread = _t.Item2.Accounts.AsNoTracking().Single(a => a.SiteId == "twitter" && a.IsActive);
+        Assert.Equal(AccountStatus.Invalid, reread.Status);
+    }
+
+    [Fact]
+    public async Task Verify_persists_ok_status_for_detached_entity()
+    {
+        await _svc.ImportCookiesAsync("twitter", MakeCookiesFile());
+        var account = GetDetachedActiveAccount();
+        // 模拟导入即失效后重新验证成功：库中先落 Invalid，再以正常 WhoAmI 重验
+        _engine.WhoAmIError = new AuthException("临时失效");
+        await _svc.VerifyAsync(account);
+        _engine.WhoAmIError = null;
+        var result = await _svc.VerifyAsync(account);
+        Assert.True(result.Ok);
+        Assert.Equal("stub_user", result.Account.ScreenName);
+        Assert.NotNull(result.Account.VerifiedAt);
+        var reread = _t.Item2.Accounts.AsNoTracking().Single(a => a.SiteId == "twitter" && a.IsActive);
+        Assert.Equal(AccountStatus.Ok, reread.Status);
+        Assert.Equal("stub_user", reread.ScreenName);
+        Assert.NotNull(reread.VerifiedAt);
+    }
 }
