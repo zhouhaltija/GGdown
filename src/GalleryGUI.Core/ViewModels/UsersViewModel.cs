@@ -79,7 +79,7 @@ public partial class UsersViewModel : ObservableObject
     private readonly IUiDispatcher _dispatcher;
     private readonly SiteRegistry _sites;
 
-    private CancellationTokenSource? _searchDebounce;
+    private CancellationTokenSource? _refreshDebounce; // SearchText/SortBy 共用的防抖等待
     private int _refreshId; // 并发刷新代数：过期刷新的集合变更丢弃
     private bool _hasUsers;
     private bool _hasAccount;
@@ -124,6 +124,9 @@ public partial class UsersViewModel : ObservableObject
     private string? _searchText;
 
     [ObservableProperty]
+    private string _sortBy = "last_download"; // F4 排序维度：last_download / download_count / added_at
+
+    [ObservableProperty]
     private string? _statusMessage;   // 操作结果反馈（成功/失败一行话）
 
     public event Action? RequestReload;                     // B4 导入流程完成后通知刷新
@@ -142,26 +145,29 @@ public partial class UsersViewModel : ObservableObject
     // brief Step 4 XAML 绑定 ShowAddUserCommand/ShowImportCookieCommand（Produces 契约之外的占位命令，
     // "直接调 VM 内部占位命令——B4 接线"），命令转发为事件，页面订阅后转对话框。
 
-    /// <summary>300ms 防抖：Task.Delay 期间新输入经 CTS 竞争取消旧等待，只有最后一次生效。</summary>
-    partial void OnSearchTextChanged(string? value)
+    /// <summary>300ms 防抖（SearchText/SortBy 共用）：Task.Delay 期间新变更经 CTS 竞争取消旧等待，只有最后一次生效。</summary>
+    partial void OnSearchTextChanged(string? value) => StartDebouncedRefresh();
+
+    partial void OnSortByChanged(string value) => StartDebouncedRefresh();
+
+    private void StartDebouncedRefresh()
     {
-        _searchDebounce?.Cancel();
-        _searchDebounce?.Dispose();
-        var cts = _searchDebounce = new CancellationTokenSource();
-        _ = DebouncedRefreshAsync(value, cts.Token);
+        _refreshDebounce?.Cancel();
+        _refreshDebounce?.Dispose();
+        var cts = _refreshDebounce = new CancellationTokenSource();
+        _ = DebouncedRefreshAsync(cts.Token);
     }
 
-    private async Task DebouncedRefreshAsync(string? value, CancellationToken ct)
+    private async Task DebouncedRefreshAsync(CancellationToken ct)
     {
         try
         {
             await Task.Delay(300, ct);
-            if (!string.Equals(value, SearchText)) return; // 双保险：值已变则丢弃（CTS 已保证）
             await RefreshAsync();
         }
         catch (OperationCanceledException)
         {
-            // 新输入取消了旧等待，静默退出
+            // 新变更取消了旧等待，静默退出
         }
     }
 
@@ -174,28 +180,40 @@ public partial class UsersViewModel : ObservableObject
 
     private async Task RefreshAsync()
     {
-        var gen = ++_refreshId;
-        var filter = new UserFilter(SearchText);
-        var list = await _userQuery.ListAsync(SiteId, filter);
-        var account = await _accountQuery.GetActiveAsync(SiteId);
-        var selectedIds = Users.Where(r => r.IsSelected).Select(r => r.Model.Id).ToHashSet();
-        _dispatcher.Post(() =>
+        try
         {
-            if (gen != _refreshId) return; // 过期刷新：已被更新的查询取代
-            Users.Clear();
-            foreach (var user in list)
+            var gen = ++_refreshId;
+            var filter = new UserFilter(SearchText, SortBy);
+            var list = await _userQuery.ListAsync(SiteId, filter);
+            var account = await _accountQuery.GetActiveAsync(SiteId);
+            _dispatcher.Post(() =>
             {
-                var row = CreateRow(user);
-                if (selectedIds.Contains(user.Id)) row.IsSelected = true; // 保留同 Id 行的选中态
-                Users.Add(row);
-            }
-            _hasUsers = list.Count > 0;
-            _hasAccount = account is not null;
-            OnPropertyChanged(nameof(HasUsers));
-            OnPropertyChanged(nameof(HasAccount));
-            OnPropertyChanged(nameof(ImportButtonVisible));
-            NotifySelection();
-        });
+                if (gen != _refreshId) return; // 过期刷新：已被更新的查询取代
+                var selectedIds = Users.Where(r => r.IsSelected).Select(r => r.Model.Id).ToHashSet();
+                Users.Clear();
+                foreach (var user in list)
+                {
+                    var row = CreateRow(user);
+                    if (selectedIds.Contains(user.Id)) row.IsSelected = true; // 保留同 Id 行的选中态
+                    Users.Add(row);
+                }
+                _hasUsers = list.Count > 0;
+                _hasAccount = account is not null;
+                OnPropertyChanged(nameof(HasUsers));
+                OnPropertyChanged(nameof(HasAccount));
+                OnPropertyChanged(nameof(ImportButtonVisible));
+                NotifySelection();
+            });
+        }
+        // 覆盖防抖/页面 OnNavigatedTo/OnAccountInvalid/命令四个入口：坏库等异常落 StatusMessage 不崩线程
+        catch (OperationCanceledException)
+        {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            StatusMessage = $"刷新失败：{ex.Message}";
+        }
     }
 
     private UserRowViewModel CreateRow(User user)
@@ -231,7 +249,17 @@ public partial class UsersViewModel : ObservableObject
 
     private async Task DownloadUsersAsync(IReadOnlyList<User> users)
     {
-        var account = await _accountQuery.GetActiveAsync(SiteId);
+        Account? account;
+        try
+        {
+            // 与 DownloadsViewModel.DownloadAccountContentAsync 对齐：坏库等异常落 StatusMessage 不崩线程
+            account = await _accountQuery.GetActiveAsync(SiteId);
+        }
+        catch (Exception ex)
+        {
+            StatusMessage = $"账号状态获取失败：{ex.Message}";
+            return;
+        }
         if (account is null)
         {
             StatusMessage = "请先在设置中导入 Cookie";
@@ -256,16 +284,30 @@ public partial class UsersViewModel : ObservableObject
     {
         var ids = Users.Where(r => r.IsSelected).Select(r => r.Model.Id).ToList();
         if (ids.Count == 0) return;
-        await _users.RemoveAsync(ids);
-        StatusMessage = $"已删除 {ids.Count} 个用户";
-        await RefreshAsync();
+        try
+        {
+            await _users.RemoveAsync(ids);
+            StatusMessage = $"已删除 {ids.Count} 个用户";
+            await RefreshAsync();
+        }
+        catch (Exception ex)
+        {
+            StatusMessage = $"删除失败：{ex.Message}";
+        }
     }
 
     private async Task DeleteOneAsync(UserRowViewModel row)
     {
-        await _users.RemoveAsync([row.Model.Id]);
-        StatusMessage = "已删除 1 个用户";
-        await RefreshAsync();
+        try
+        {
+            await _users.RemoveAsync([row.Model.Id]);
+            StatusMessage = "已删除 1 个用户";
+            await RefreshAsync();
+        }
+        catch (Exception ex)
+        {
+            StatusMessage = $"删除失败：{ex.Message}";
+        }
     }
 
     private async Task TogglePinCoreAsync(UserRowViewModel row)

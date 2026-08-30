@@ -20,7 +20,6 @@ public class UsersViewModelTests : IDisposable
     private readonly GalleryDbContext _db;
     private readonly UsersViewModel _vm;
     private readonly Account _account;
-    private int _selectionNotifications;
 
     public UsersViewModelTests()
     {
@@ -107,5 +106,57 @@ public class UsersViewModelTests : IDisposable
         await _vm.DeleteSelectedCommand.ExecuteAsync(null);
         Assert.Single(_vm.Users);
         Assert.False(_db.Users.AsNoTracking().Any(u => u.ScreenName == "alice"));
+    }
+
+    // 修复波 F3 回归：ListAsync 抛异常（坏库等）→ StatusMessage 兜底"刷新失败"，不抛出崩调用线程
+    [Fact]
+    public async Task Refresh_failure_sets_status_message_instead_of_throwing()
+    {
+        var factory = new SingleDbContextFactory(_db);
+        var sites = new SiteRegistry([new TwitterSiteProvider()]);
+        var settings = new AppSettings(factory, sites);
+        var queue = new DownloadQueueService(factory, _engine, new FakeStats(), _paths, sites, NullLogger<DownloadQueueService>.Instance);
+        var vm = new UsersViewModel(new ThrowingUserQuery(), new AccountQueryService(factory),
+            new UserService(_db, _engine, _paths, sites, NullLogger<UserService>.Instance),
+            queue, settings, new SyncDispatcher(), sites);
+        vm.Users.CollectionChanged += (_, _) => { };
+
+        var ex = await Record.ExceptionAsync(() => vm.RefreshCommand.ExecuteAsync(null));
+        Assert.Null(ex);
+        Assert.Contains("刷新失败", vm.StatusMessage);
+    }
+
+    // 修复波 F4：SortBy 变更触发与 SearchText 同机制的防抖刷新，UserFilter(SortBy) 传入查询
+    [Fact]
+    public async Task SortBy_change_refreshes_ordered_by_download_count()
+    {
+        await _vm.RefreshCommand.ExecuteAsync(null);
+        _db.Users.Single(u => u.ScreenName == "alice").IsPinned = true; // alice 置顶（QueriesTests 播种模式）
+        _db.Users.Single(u => u.ScreenName == "bob").DownloadCount = 1;
+        _db.Users.Add(NewUser("3", "carol", count: 9));
+        _db.SaveChanges();
+
+        _vm.SortBy = "download_count";
+        await Task.Delay(450); // 300ms 防抖 + 余量（防抖路径本身即被测行为）
+
+        Assert.Equal(["alice", "carol", "bob"], _vm.Users.Select(r => r.Model.ScreenName).ToArray()); // 置顶优先，其余按计数降序
+    }
+
+    // 修复波 F4：两态全选 → 逐行 IsSelected 且 SelectedCount 同步更新
+    [Fact]
+    public async Task SelectAll_sets_every_row_and_updates_SelectedCount()
+    {
+        await _vm.RefreshCommand.ExecuteAsync(null);
+        _vm.SelectAll(true);
+        Assert.Equal(2, _vm.SelectedCount);
+        Assert.All(_vm.Users, r => Assert.True(r.IsSelected));
+        _vm.SelectAll(false);
+        Assert.Equal(0, _vm.SelectedCount);
+    }
+
+    private sealed class ThrowingUserQuery : IUserQueryService
+    {
+        public Task<IReadOnlyList<User>> ListAsync(string siteId, UserFilter filter, CancellationToken ct = default)
+            => throw new InvalidOperationException("boom");
     }
 }

@@ -108,4 +108,21 @@ public sealed partial class UsersPage : Page
             Vm.StatusMessage = ex.Message;
         }
     }
+
+    // ---- F4：排序下拉与表头全选 ----
+
+    // SelectedIndex 0/1/2 → SortBy 字符串；变更经 VM 与 SearchText 同机制的 300ms 防抖刷新。
+    // 初始 SelectedIndex=0 触发的 SelectionChanged 赋回默认值 "last_download"，不产生属性变更、不触发刷新。
+    private void OnSortChanged(object sender, SelectionChangedEventArgs e)
+        => Vm.SortBy = (sender as ComboBox)?.SelectedIndex switch
+        {
+            1 => "download_count",
+            2 => "added_at",
+            _ => "last_download",
+        };
+
+    // 两态全选（定稿：不支持 indeterminate 显示）；SelectAll 逐行设 IsSelected 并经 SelectedChanged 更新计数
+    private void OnSelectAllChecked(object sender, RoutedEventArgs e) => Vm.SelectAll(true);
+
+    private void OnSelectAllUnchecked(object sender, RoutedEventArgs e) => Vm.SelectAll(false);
 }

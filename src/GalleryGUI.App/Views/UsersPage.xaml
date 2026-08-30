@@ -18,13 +18,25 @@
             <AutoSuggestBox PlaceholderText="搜索用户名/昵称" QueryIcon="Find"
                              Text="{x:Bind Vm.SearchText, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
                              Width="240"/>
+            <!-- F4：排序维度（SelectedIndex 0/1/2 → SortBy 字符串，映射在 code-behind OnSortChanged） -->
+            <ComboBox SelectedIndex="0" Width="140" VerticalAlignment="Center"
+                      SelectionChanged="OnSortChanged">
+                <ComboBoxItem Content="按末次下载"/>
+                <ComboBoxItem Content="按下载次数"/>
+                <ComboBoxItem Content="按添加时间"/>
+            </ComboBox>
         </StackPanel>
         <!-- 列表：DataGrid -->
         <controls:DataGrid Grid.Row="1" ItemsSource="{x:Bind Vm.Users, Mode=OneWay}"
                            AutoGenerateColumns="False" CanUserSortColumns="False"
                            IsReadOnly="True" SelectionMode="Single" HeadersVisibility="All" Margin="12,0">
             <controls:DataGrid.Columns>
-                <controls:DataGridTemplateColumn Header="" Width="40">
+                <!-- F4：表头两态全选框——Checked/Unchecked → Vm.SelectAll（定稿不支持 indeterminate 显示） -->
+                <controls:DataGridTemplateColumn Width="40">
+                    <controls:DataGridTemplateColumn.Header>
+                        <CheckBox HorizontalAlignment="Center" MinWidth="0"
+                                  Checked="OnSelectAllChecked" Unchecked="OnSelectAllUnchecked"/>
+                    </controls:DataGridTemplateColumn.Header>
                     <controls:DataGridTemplateColumn.CellTemplate>
                         <DataTemplate><CheckBox IsChecked="{Binding IsSelected, Mode=TwoWay}" HorizontalAlignment="Center"/></DataTemplate>
                     </controls:DataGridTemplateColumn.CellTemplate>

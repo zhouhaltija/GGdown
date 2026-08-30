@@ -4,6 +4,7 @@ using GalleryGUI.Data;
 using GalleryGUI.Paths;
 using GalleryGUI.Engine;
 using GalleryGUI.Services;
+using GalleryGUI.Settings;
 using GalleryGUI.Threading;
 using GalleryGUI.App.Infrastructure;
 using GalleryGUI.App.Views;
@@ -63,7 +64,8 @@ public partial class App : Application
             new UiDispatcher(DispatcherQueue.GetForCurrentThread()));
         services.AddSingleton<FileDialogService>();
         services.AddSingleton<LauncherService>();
-        services.AddSingleton<UsersViewModel>();
+        // 依赖 IUserService(Scoped)——同 SettingsViewModel 裁定；页面 NavigationCacheMode=Enabled 构造一次，实例与页面同生命周期
+        services.AddTransient<UsersViewModel>();
         services.AddSingleton<DownloadsViewModel>(); // B5：下载页 VM（页面缓存 NavigationCacheMode=Enabled，singleton 保持订阅/退订对称）
         services.AddSingleton<HistoryViewModel>(); // B6：历史页 VM（同上，singleton 保持筛选状态跨导航）
         // B7：设置页 VM 注册为 Transient（ImportViewModel 先例）——其依赖 IAccountService 是 Scoped，
@@ -85,6 +87,10 @@ public partial class App : Application
                 // 全新机器上首跑会因缺表使恢复与所有页面查询失败，故在首次触库前先建库
                 await DbInitializer.InitializeAsync(
                     scope.ServiceProvider.GetRequiredService<GalleryDbContext>());
+                // Global Constraint：启动即应用保存的并发数（此前仅设置页应用，未访问设置页不生效）
+                var queue = scope.ServiceProvider.GetRequiredService<IDownloadQueueService>();
+                queue.Concurrency = await scope.ServiceProvider.GetRequiredService<IAppSettings>()
+                    .GetConcurrencyAsync();
                 await scope.ServiceProvider.GetRequiredService<IDownloadQueueService>()
                     .RecoverOnStartupAsync();
             }

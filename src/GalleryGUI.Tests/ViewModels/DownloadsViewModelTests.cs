@@ -203,7 +203,9 @@ public class DownloadsViewModelTests : IDisposable
         Assert.DoesNotContain(_vm.Jobs, c => c.JobId == jobId);
     }
 
-    private static async Task WaitUntil(Func<bool> cond, int timeoutMs = 5000)
+    // 修复波 B5 flaky 处置：隔离复跑 3/3 通过、全量负载下偶发 5s 超时（累计 3 次）——负载敏感而非回归，
+    // 按最终审查建议把默认 timeoutMs 5000→15000（纯测试参数，断言不变）
+    private static async Task WaitUntil(Func<bool> cond, int timeoutMs = 15000)
     {
         var start = Environment.TickCount;
         while (!cond())
