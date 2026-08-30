@@ -77,6 +77,7 @@ public sealed partial class TwitterSiteProvider : ISiteProvider
         var extractorOptions = new Dictionary<string, object?>
         {
             ["cookies"] = paths.CookiesFile,
+            ["archive"] = paths.ArchiveFile,
             ["videos"] = B("videos", true),
             ["retweets"] = B("retweets", false),
             ["quoted"] = B("quoted", false),
@@ -87,7 +88,6 @@ public sealed partial class TwitterSiteProvider : ISiteProvider
         var nested = new Dictionary<string, object?>
         {
             ["extractor"] = new Dictionary<string, object?> { [Id] = extractorOptions },
-            ["download-archive"] = paths.ArchiveFile,
             ["base-directory"] = target.BaseDirectory ?? "",
         };
         return new DownloadPlan(Id, [url], target.BaseDirectory ?? "", nested);

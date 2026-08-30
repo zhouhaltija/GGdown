@@ -89,9 +89,14 @@ public class EngineSmokeTests : IDisposable
             var nested = new Dictionary<string, object?>
             {
                 ["extractor"] = new Dictionary<string, object?>
-                { ["generic"] = new Dictionary<string, object?> { ["enabled"] = true } },
+                {
+                    ["generic"] = new Dictionary<string, object?>
+                    {
+                        ["enabled"] = true,
+                        ["archive"] = Path.Combine(_paths.ArchiveDir, "e2e.txt"),
+                    },
+                },
                 ["base-directory"] = _paths.Root,
-                ["download-archive"] = Path.Combine(_paths.ArchiveDir, "e2e.txt"),
             };
             var plan = new DownloadPlan("twitter", [$"http://127.0.0.1:{port}/file.jpg"], _paths.Root, nested);
 

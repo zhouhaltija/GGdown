@@ -45,7 +45,7 @@ public class TwitterSiteProviderTests
         Assert.False((bool)ex["retweets"]!);
         Assert.Equal(@"C:\a\cookies.txt", ex["cookies"]);
         Assert.Equal("2", ex["sleep-request"]);
-        Assert.Equal(@"C:\arc\1.txt", plan.Options["download-archive"]);
+        Assert.Equal(@"C:\arc\1.txt", ex["archive"]);
         Assert.Equal(@"D:\dl", plan.Options["base-directory"]);
     }
 
