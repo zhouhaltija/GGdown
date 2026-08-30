@@ -2,6 +2,7 @@ using GalleryGUI.Data;
 using GalleryGUI.Engine;
 using GalleryGUI.Paths;
 using GalleryGUI.Services;
+using GalleryGUI.Settings;
 using GalleryGUI.Sites;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
@@ -35,6 +36,11 @@ public static class CoreServices
         services.AddSingleton<StatsAggregator>(); // T11 落地
         // T10 落地：DownloadQueueService 为 singleton 且只用 IDbContextFactory 访问数据库
         services.AddSingleton<IDownloadQueueService, DownloadQueueService>();
+        // Task B2 落地：查询服务与 AppSettings（brief Step 4 四处注册）
+        services.AddSingleton<IAppSettings, AppSettings>();
+        services.AddSingleton<IUserQueryService, UserQueryService>();
+        services.AddSingleton<IAccountQueryService, AccountQueryService>();
+        services.AddSingleton<IHistoryQueryService, HistoryQueryService>();
         return services;
     }
 }

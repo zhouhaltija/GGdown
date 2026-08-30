@@ -2,6 +2,7 @@ using GalleryGUI.Data;
 using GalleryGUI.Engine;
 using GalleryGUI.Services;
 using GalleryGUI.Sites;
+using GalleryGUI.Threading;
 using Microsoft.Data.Sqlite;
 using Microsoft.EntityFrameworkCore;
 
@@ -70,6 +71,14 @@ public sealed class SingleDbContextFactory(GalleryDbContext db) : IDbContextFact
 {
     public GalleryDbContext CreateDbContext() =>
         new(new DbContextOptionsBuilder<GalleryDbContext>().UseSqlite(db.Database.GetDbConnection()).Options);
+}
+
+/// <summary>
+/// IUiDispatcher 的测试同步实现（Task B2）：Post 在当前线程立即执行，便于 ViewModel 单测同步断言。
+/// </summary>
+public sealed class SyncDispatcher : IUiDispatcher
+{
+    public void Post(Action action) => action();
 }
 
 /// <summary>
