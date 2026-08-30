@@ -131,8 +131,8 @@ public partial class DownloadsViewModel : ObservableObject
     public IAsyncRelayCommand DownloadBookmarksCommand { get; }
 
     /// <summary>
-    /// 订阅 queue.JobChanged/JobRemoved + 用 Active 现值播种卡片 + 刷新 HasAccount。
-    /// 先订阅后播种（防漏事件），播种按 JobId 去重（防与已到达事件重复建卡）。
+    /// 订阅 queue.JobChanged/JobRemoved + 播种 Active 现值 + 剪除 Stop 窗口内错失终态的幽灵卡片
+    /// （审查 Important-1）+ 刷新 HasAccount。先订阅后播种（防漏事件）。
     /// 页面 OnNavigatedTo 调用；幂等（重复调用无副作用）。
     /// </summary>
     public void Start()
@@ -141,8 +141,23 @@ public partial class DownloadsViewModel : ObservableObject
         _started = true;
         _queue.JobChanged += OnJobChanged;
         _queue.JobRemoved += OnJobRemoved;
-        foreach (var snapshot in _queue.Active)
-            _dispatcher.Post(() => AddOrUpdateCard(snapshot));
+        // 审查 Important-1：NavigationCacheMode=Enabled + singleton 下，离页 Stop 后任务在后台跑到终态
+        // 时 JobChanged/JobRemoved 均丢失，残留卡片会永久停在"下载中"且 HasActive 卡 true（取消对已结束
+        // 任务也是空操作）——播种时按 Active 的 JobId 集合剪除已不存在者（同批经 dispatcher）并重算 HasActive
+        var active = _queue.Active;
+        var activeIds = active.Select(s => s.JobId).ToHashSet();
+        _dispatcher.Post(() =>
+        {
+            for (var i = Jobs.Count - 1; i >= 0; i--)
+            {
+                if (!activeIds.Contains(Jobs[i].JobId))
+                    Jobs.RemoveAt(i);
+            }
+            foreach (var snapshot in active)
+                AddOrUpdateCard(snapshot);
+            UpdateHasActive();
+            JobsChanged?.Invoke();
+        });
         _ = RefreshHasAccountAsync(); // fire-and-forget：内部自捕获异常（B4 模式，不崩线程）
     }
 
@@ -200,7 +215,17 @@ public partial class DownloadsViewModel : ObservableObject
     // 控制器裁定 6：解析账号 → IAppSettings 目录与 siteOptions → EnqueueAccountContentAsync
     private async Task DownloadAccountContentAsync(ContentKind kind)
     {
-        var account = await _accountQuery.GetActiveAsync(SiteId);
+        Account? account;
+        try
+        {
+            // 审查 Minor-1：与 RefreshHasAccountAsync 一致，坏库等异常落 StatusMessage 不崩线程
+            account = await _accountQuery.GetActiveAsync(SiteId);
+        }
+        catch (Exception ex)
+        {
+            StatusMessage = $"账号状态获取失败：{ex.Message}";
+            return;
+        }
         if (account is null)
         {
             StatusMessage = "请先在设置中导入 Cookie";
@@ -234,7 +259,9 @@ public partial class DownloadsViewModel : ObservableObject
         _dispatcher.Post(() =>
         {
             HasAccount = error is null && account is not null;
-            if (error is not null) StatusMessage = $"账号状态获取失败：{error.Message}";
+            // 审查 Minor-2：错误提示不覆写已有的操作反馈（StatusMessage 非空时跳过）
+            if (error is not null && StatusMessage is null)
+                StatusMessage = $"账号状态获取失败：{error.Message}";
         });
     }
 }

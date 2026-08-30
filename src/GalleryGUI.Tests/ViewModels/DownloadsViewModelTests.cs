@@ -179,6 +179,30 @@ public class DownloadsViewModelTests : IDisposable
         Assert.Empty(_engine.Downloads); // 引擎未被触达
     }
 
+    // 审查 Important-1 回归：Stop 窗口内任务终态（JobChanged/JobRemoved 均丢失）→ 重新 Start 后无幽灵卡片残留
+    [Fact]
+    public async Task Start_prunes_ghost_cards_from_missed_removals_during_stop()
+    {
+        var gate = new TaskCompletionSource();
+        _engine.OnDownload = async (_, _, _, _) => await gate.Task;
+
+        var jobId = await _queue.EnqueueUserMediaAsync(_account, [_alice], @"D:\dl", Opts());
+        await WaitUntil(() => _vm.Jobs.Count == 1 && _vm.HasActive); // 卡片已建（ctor 已 Start 订阅）
+
+        _vm.Stop();       // 离页：退订
+        gate.SetResult(); // 任务在 Stop 窗口内跑到终态，JobChanged/JobRemoved 均错过
+        await WaitUntil(() => _queue.Active.Count == 0);
+
+        // 修复前 bug 的 precondition：卡片滞留"下载中"、HasActive 卡 true
+        Assert.Single(_vm.Jobs);
+        Assert.True(_vm.HasActive);
+
+        _vm.Start(); // 回页：播种 + 剪除
+        await WaitUntil(() => _vm.Jobs.Count == 0);
+        Assert.False(_vm.HasActive);
+        Assert.DoesNotContain(_vm.Jobs, c => c.JobId == jobId);
+    }
+
     private static async Task WaitUntil(Func<bool> cond, int timeoutMs = 5000)
     {
         var start = Environment.TickCount;
