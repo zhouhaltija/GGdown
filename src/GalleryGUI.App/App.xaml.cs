@@ -7,6 +7,7 @@ using GalleryGUI.Services;
 using GalleryGUI.Threading;
 using GalleryGUI.App.Infrastructure;
 using GalleryGUI.App.Views;
+using GalleryGUI.ViewModels;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using Microsoft.UI.Dispatching;
@@ -17,6 +18,14 @@ namespace GalleryGUI.App;
 
 public partial class App : Application
 {
+    // 控制器裁定 1（B1 遗漏补齐）：页面代码用 App.Current.Services 解析服务
+    public static App Current => (App)Application.Current;
+
+    // 控制器裁定 2：就绪门——启动任务（建库+恢复）完成后放行，
+    // 页面 OnNavigatedTo 中 await App.Readiness 后再触发首刷，避免新机器上首查因缺表失败
+    private static readonly TaskCompletionSource _readyTcs = new();
+    public static Task Readiness => _readyTcs.Task;
+
     public IServiceProvider Services { get; private set; } = null!;
     private Window? _window;
 
@@ -41,6 +50,7 @@ public partial class App : Application
             new UiDispatcher(DispatcherQueue.GetForCurrentThread()));
         services.AddSingleton<FileDialogService>();
         services.AddSingleton<LauncherService>();
+        services.AddSingleton<UsersViewModel>();
         Services = services.BuildServiceProvider();
 
         ApplyDevEngineOverrides();
@@ -59,6 +69,7 @@ public partial class App : Application
                     .RecoverOnStartupAsync();
             }
             catch (Exception ex) { Log.Error(ex, "启动恢复失败"); }
+            finally { _readyTcs.TrySetResult(); } // 控制器裁定 2：成功失败都放行就绪门
         });
 
         _window = new MainWindow(Services);
