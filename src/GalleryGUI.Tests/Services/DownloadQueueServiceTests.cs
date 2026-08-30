@@ -76,6 +76,23 @@ public class DownloadQueueServiceTests : IDisposable
     }
 
     [Fact]
+    public async Task Enqueue_multiple_users_returns_first_job_id()
+    {
+        // 审查 Important-1 回归覆盖：接口契约"每用户一个 DownloadJob 行，返回首个 jobId"
+        var bob = new User
+        { SiteId = "twitter", RestId = "2", ScreenName = "bob", Source = UserSource.Following, AddedAt = DateTime.UtcNow, UpdatedAt = DateTime.UtcNow };
+        _db.Users.Add(bob);
+        _db.SaveChanges();
+
+        var first = await _queue.EnqueueUserMediaAsync(_account, [_alice, bob], @"D:\dl", Opts());
+        await WaitUntil(() => _queue.Active.Count == 0);
+
+        var firstJob = _db.Jobs.AsNoTracking().OrderBy(j => j.Id).First();
+        Assert.Equal(firstJob.Id, first);
+        Assert.Equal(_alice.Id, firstJob.UserId);
+    }
+
+    [Fact]
     public async Task Cancel_moves_job_to_canceled()
     {
         var gate = new TaskCompletionSource();

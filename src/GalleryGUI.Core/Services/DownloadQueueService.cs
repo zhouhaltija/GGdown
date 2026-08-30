@@ -74,7 +74,7 @@ public sealed class DownloadQueueService(
             };
             db.Jobs.Add(job);
             await db.SaveChangesAsync(ct);
-            first = job.Id;
+            if (first == 0) first = job.Id; // 接口契约"返回首个 jobId"：循环内无条件覆盖会在多用户时返回最后一个（审查 Important-1）
             var title = string.IsNullOrEmpty(user.DisplayName) ? user.ScreenName : user.DisplayName!;
             AddActive(job.Id, account.SiteId, TargetKind.UserMedia, title, JobStatus.Pending);
             _pending.Enqueue(new WorkItem(job.Id, account.Id, account.SiteId, TargetKind.UserMedia,
@@ -188,6 +188,10 @@ public sealed class DownloadQueueService(
         // 适配：协议仅 file-start 携带 item_id（stub_runner.py 与 JsonlParserTests 一致），file-done/file-skip
         // 落库的 SourceItemId 用事件自身 item_id，缺省回退到最近一次 file-start 的 item_id（测试即此语义）。
         string? currentItemId = null;
+        // 审查 Important-2：文件落库不逐条 await（不回退事件吞吐），但每个 finish 路径在进入终态前必须
+        // 排干在途插入，否则 FinishJobAsync 的统计聚合可能读到缺行快照，用户 DownloadCount 永久少计。
+        // InsertFileAsync 内部 try/catch 不抛，Task.WhenAll 安全。
+        var pendingInserts = new List<Task>();
 
         try
         {
@@ -201,12 +205,12 @@ public sealed class DownloadQueueService(
                         break;
                     case "file-done":
                         done++;
-                        _ = InsertFileAsync(item.JobId, item.UserId, ev, FileStatus.Downloaded, ev.ItemId ?? currentItemId);
+                        pendingInserts.Add(InsertFileAsync(item.JobId, item.UserId, ev, FileStatus.Downloaded, ev.ItemId ?? currentItemId));
                         UpdateSnapshot(item.JobId, done: done);
                         break;
                     case "file-skip":
                         skipped++;
-                        _ = InsertFileAsync(item.JobId, item.UserId, ev, FileStatus.Skipped, ev.ItemId ?? currentItemId);
+                        pendingInserts.Add(InsertFileAsync(item.JobId, item.UserId, ev, FileStatus.Skipped, ev.ItemId ?? currentItemId));
                         UpdateSnapshot(item.JobId, skipped: skipped);
                         break;
                     case "log" when ev.Level == "error":
@@ -223,11 +227,13 @@ public sealed class DownloadQueueService(
             });
 
             await engine.DownloadAsync(plan, item.CookieAbsolutePath, progress, cts.Token);
+            await Task.WhenAll(pendingInserts); // 统计聚合前排干在途文件落库（审查 Important-2）
             await FinishJobAsync(item, JobStatus.Completed, null, hasFinal,
                 totalFinal, skippedFinal, failedFinal, done, skipped, failed);
         }
         catch (AuthException e)
         {
+            await Task.WhenAll(pendingInserts); // 统计聚合前排干在途文件落库（审查 Important-2）
             await FinishJobAsync(item, JobStatus.Failed, "登录态失效，请重新导入 Cookie", hasFinal,
                 totalFinal, skippedFinal, failedFinal, done, skipped, failed);
             await using var db = await factory.CreateDbContextAsync();
@@ -237,11 +243,13 @@ public sealed class DownloadQueueService(
         }
         catch (OperationCanceledException)
         {
+            await Task.WhenAll(pendingInserts); // 统计聚合前排干在途文件落库（审查 Important-2）
             await FinishJobAsync(item, JobStatus.Canceled, null, hasFinal,
                 totalFinal, skippedFinal, failedFinal, done, skipped, failed);
         }
         catch (EngineException e)
         {
+            await Task.WhenAll(pendingInserts); // 统计聚合前排干在途文件落库（审查 Important-2）
             await FinishJobAsync(item, JobStatus.Failed, e.Message, hasFinal,
                 totalFinal, skippedFinal, failedFinal, done, skipped, failed);
         }
