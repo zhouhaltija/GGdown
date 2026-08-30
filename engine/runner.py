@@ -10,7 +10,7 @@ import traceback
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-from sites import AuthError, EventHandler, emit, emit_hello
+from sites import AuthError, EventHandler, classify_error, emit, emit_hello
 
 
 class EventOutput:
@@ -129,7 +129,8 @@ def main(argv=None):
         emit("fatal", msg=str(e), kind="auth")
         return 2
     except Exception as e:
-        emit("fatal", msg=f"{type(e).__name__}: {e}")
+        # 审查 Important-5：下载中途认证失效须带 kind="auth"，C# 侧据 fatal kind=auth 触发账号置 Invalid
+        emit("fatal", msg=f"{type(e).__name__}: {e}", kind=classify_error(e))
         traceback.print_exc(file=sys.stderr)
         return 1
 

@@ -28,6 +28,24 @@ def emit_hello():
     emit("hello", protocol=PROTOCOL, runner=RUNNER_VERSION, gallery_dl=ver)
 
 
+def classify_error(e):
+    """把未知异常归类为协议 fatal 事件的 kind（None=普通错误，"auth"=认证失效）。
+
+    审查 Important-5：下载中途认证失效原本不带 kind="auth"，账号不会被置 Invalid。
+    注意不能把 gallery_dl.exception.AuthorizationError 一律映射为 auth——它还涵盖账号被封/
+    受保护内容等情形，误映射会把有效账号标成 Invalid；字符串匹配只针对认证失效特征，
+    isinstance 保留（AuthenticationError 是认证失效的专用类型）。惰性 import 保证
+    gallery-dl 缺失时 hello 命令仍可用。
+    """
+    try:
+        from gallery_dl import exception as gdl_exc
+        if isinstance(e, gdl_exc.AuthenticationError) or "Could not authenticate you" in str(e):
+            return "auth"
+    except Exception:
+        pass
+    return None
+
+
 def walk_config(d, base=()):
     """把嵌套 dict 展开为 (path_tuple, value) 序列，供 gallery_dl.config.set 使用。"""
     for k, v in d.items():
