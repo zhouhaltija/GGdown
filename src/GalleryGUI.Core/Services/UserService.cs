@@ -29,6 +29,9 @@ public sealed class UserService(
         var provider = sites.Get(account.SiteId);
         foreach (var info in followed)
             await UpsertAsync(account, info, UserSource.Following, provider, ct);
+        // B8 警告清理：CS9113（log 主构造参数未读）——顺手补一条信息级结果日志，手测项 3 可据此核对导入数量
+        log.LogInformation("导入关注列表：{SiteId}/{ScreenName} 共 {Count} 人",
+            account.SiteId, account.ScreenName, followed.Count);
         return followed.Count;
     }
 

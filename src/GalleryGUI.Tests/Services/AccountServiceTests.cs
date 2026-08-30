@@ -69,7 +69,7 @@ public class AccountServiceTests : IDisposable
         // 适配：ExecuteUpdate 绕过变更跟踪器，同一 DbContext 的跟踪查询会返回陈旧实例，用 AsNoTracking 读库中真实状态
         var all = _t.Item2.Accounts.AsNoTracking().Where(a => a.SiteId == "twitter").ToList();
         Assert.Equal(2, all.Count);
-        Assert.Single(all.Where(a => a.IsActive));
+        Assert.Single(all, a => a.IsActive); // B8 警告清理：xUnit2031（Where 后接 Assert.Single → 用带谓词重载）
         Assert.Equal(second.Account.Id, all.Single(a => a.IsActive).Id);
     }
 

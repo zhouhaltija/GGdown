@@ -45,6 +45,16 @@ public partial class App : Application
                 rollingInterval: RollingInterval.Day,
                 retainedFileCountLimit: 14)
             .CreateLogger();
+        // B8：启动即落一条日志——文件 sink 首条事件才建文件，保证"日志文件生成"可手测验证
+        Log.Information("GalleryGUI 启动：日志目录 {LogsDir}", paths.LogsDir);
+
+        // B8：UI 线程未处理异常记日志（不主动标 Handled，保持默认崩溃对话框行为），便于事后从日志定位；
+        // 崩溃路径不走 MainWindow.Closed，这里兜底刷盘（若被其他处理器标 Handled 则应用继续运行，不能关日志）
+        UnhandledException += (_, e) =>
+        {
+            Log.Error(e.Exception, "UI 线程未处理异常：{Message}", e.Message);
+            if (!e.Handled) Log.CloseAndFlush();
+        };
 
         var services = new ServiceCollection();
         services.AddLogging(b => b.AddSerilog(dispose: true)); // 必须先于 AddGalleryCore
@@ -85,6 +95,10 @@ public partial class App : Application
         _window = new MainWindow(Services);
         // B4 控制器裁定：Picker 属主句柄注入（替代 B1 的 GetActiveWindow 启发式），须在窗口创建后
         Services.GetRequiredService<FileDialogService>().SetOwner(_window.WindowHandle);
+        // B8：窗口关闭即应用生命周期终点（单窗口桌面应用）——在 UI 线程确定性刷盘。
+        // 实现 selection：相比 AppDomain.ProcessExit（打包外 WinUI 进程退出时机不保证触发），
+        // MainWindow.Closed 在消息循环终止前同步触发，简单可靠；崩溃路径由上面 UnhandledException 兜底。
+        _window.Closed += (_, _) => Log.CloseAndFlush();
         _window.Activate();
     }
 

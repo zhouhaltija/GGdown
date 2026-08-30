@@ -107,6 +107,8 @@ public sealed class RunnerEngine(IAppPaths paths, RunnerEngineOptions options, I
     private async Task<RunnerResult> RunAsync(IReadOnlyList<string> args,
         Action<EngineEvent> onEvent, CancellationToken ct, bool killOnCancel)
     {
+        // B8 警告清理：CS9113（log 主构造参数未读）——Debug 级记录起止（默认 MinimumLevel=Information 不落盘）
+        log.LogDebug("runner 启动：{Args}", string.Join(" ", args));
         if (string.IsNullOrEmpty(options.PythonExe))
             throw new EngineException("引擎未安装：找不到 python（首次启动会从安装目录播种 engine）");
 
@@ -169,6 +171,7 @@ public sealed class RunnerEngine(IAppPaths paths, RunnerEngineOptions options, I
         var stderr = await stderrTask;
         var tail = stderr.Length > 2000 ? stderr[^2000..] : stderr;
         var exitCode = p.ExitCode;
+        log.LogDebug("runner 退出：退出码 {ExitCode}", exitCode);
         TryDispose(p);
 
         if (killOnCancel && ct.IsCancellationRequested)

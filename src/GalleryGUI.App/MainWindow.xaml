@@ -5,34 +5,52 @@
     Title="GalleryGUI">
     <!-- brief 原写法 Icon="&#xE716;" 在 WinUI3 运行时抛 XamlParseException（无法从裸 glyph 字符串创建 IconElement），
          改为显式 FontIcon 子元素，glyph 值不变 -->
-    <NavigationView x:Name="Nav"
-                    IsBackButtonVisible="Collapsed"
-                    IsSettingsVisible="False"
-                    PaneDisplayMode="Left"
-                    OpenPaneLength="200"
-                    SelectionChanged="Nav_SelectionChanged">
-        <NavigationView.MenuItems>
-            <NavigationViewItem Content="用户管理" Tag="users">
-                <NavigationViewItem.Icon>
-                    <FontIcon Glyph="&#xE716;"/>
-                </NavigationViewItem.Icon>
-            </NavigationViewItem>
-            <NavigationViewItem Content="下载" Tag="downloads">
-                <NavigationViewItem.Icon>
-                    <FontIcon Glyph="&#xE896;"/>
-                </NavigationViewItem.Icon>
-            </NavigationViewItem>
-            <NavigationViewItem Content="历史" Tag="history">
-                <NavigationViewItem.Icon>
-                    <FontIcon Glyph="&#xE81C;"/>
-                </NavigationViewItem.Icon>
-            </NavigationViewItem>
-            <NavigationViewItem Content="设置" Tag="settings">
-                <NavigationViewItem.Icon>
-                    <FontIcon Glyph="&#xE713;"/>
-                </NavigationViewItem.Icon>
-            </NavigationViewItem>
-        </NavigationView.MenuItems>
-        <Frame x:Name="ContentFrame"/>
-    </NavigationView>
+    <!-- B8：全局通知行（InfoBar 承载 AccountInvalid 错误 / 任务完成提示），位于 NavigationView 之上，
+         两行 Grid 使 InfoBar 独立于导航视图占顶部一条 -->
+    <Grid>
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="*"/>
+        </Grid.RowDefinitions>
+        <InfoBar x:Name="NoticeBar"
+                 Grid.Row="0"
+                 IsOpen="False"
+                 CloseButtonClick="NoticeBar_CloseButtonClick">
+            <InfoBar.ActionButton>
+                <!-- 仅错误（登录态失效）通知显示："去设置"导航 SettingsPage；成功通知时 Collapsed -->
+                <Button x:Name="GoSettingsButton" Content="去设置" Click="GoSettingsButton_Click"/>
+            </InfoBar.ActionButton>
+        </InfoBar>
+        <NavigationView x:Name="Nav"
+                        Grid.Row="1"
+                        IsBackButtonVisible="Collapsed"
+                        IsSettingsVisible="False"
+                        PaneDisplayMode="Left"
+                        OpenPaneLength="200"
+                        SelectionChanged="Nav_SelectionChanged">
+            <NavigationView.MenuItems>
+                <NavigationViewItem Content="用户管理" Tag="users">
+                    <NavigationViewItem.Icon>
+                        <FontIcon Glyph="&#xE716;"/>
+                    </NavigationViewItem.Icon>
+                </NavigationViewItem>
+                <NavigationViewItem Content="下载" Tag="downloads">
+                    <NavigationViewItem.Icon>
+                        <FontIcon Glyph="&#xE896;"/>
+                    </NavigationViewItem.Icon>
+                </NavigationViewItem>
+                <NavigationViewItem Content="历史" Tag="history">
+                    <NavigationViewItem.Icon>
+                        <FontIcon Glyph="&#xE81C;"/>
+                    </NavigationViewItem.Icon>
+                </NavigationViewItem>
+                <NavigationViewItem Content="设置" Tag="settings">
+                    <NavigationViewItem.Icon>
+                        <FontIcon Glyph="&#xE713;"/>
+                    </NavigationViewItem.Icon>
+                </NavigationViewItem>
+            </NavigationView.MenuItems>
+            <Frame x:Name="ContentFrame"/>
+        </NavigationView>
+    </Grid>
 </Window>
