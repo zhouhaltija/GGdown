@@ -1,4 +1,3 @@
-using GalleryGUI.Services;
 using GalleryGUI.Settings;
 using GalleryGUI.Sites;
 using Microsoft.Data.Sqlite; // 补 using：SqliteConnection 在 tuple 类型中未限定（brief 已知偏离模式）
@@ -16,7 +15,9 @@ public class AppSettingsTests : IDisposable
     {
         _t = TestDb.Create();
         var sites = new SiteRegistry([new TwitterSiteProvider()]);
-        _settings = new AppSettings(new GallerySettingsStore(_t.Item2), sites);
+        // captive dependency 修复（控制器裁定）：AppSettings 改注入 IDbContextFactory；SingleDbContextFactory
+        // 每次返回共享同一 SqliteConnection 的新上下文，await using 释放的不是测试持有的 _db。
+        _settings = new AppSettings(new SingleDbContextFactory(_t.Item2), sites);
     }
     public void Dispose() => _t.Item1.Dispose();
 
