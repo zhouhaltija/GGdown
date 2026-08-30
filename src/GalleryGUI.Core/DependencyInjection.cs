@@ -33,9 +33,8 @@ public static class CoreServices
         services.AddScoped<IAccountService, AccountService>();
         services.AddScoped<IUserService, UserService>();
         services.AddSingleton<StatsAggregator>(); // T11 落地
-        // T10 增补：services.AddSingleton<IDownloadQueueService, DownloadQueueService>();
-        // （brief 注明 DownloadQueueService 为 singleton 且只用 IDbContextFactory 访问数据库；类型与注册在 Task 10 落地，
-        //   progress.md 裁定执行顺序 T9 → T11 → T10，故此处暂缓注册以免编译失败。）
+        // T10 落地：DownloadQueueService 为 singleton 且只用 IDbContextFactory 访问数据库
+        services.AddSingleton<IDownloadQueueService, DownloadQueueService>();
         return services;
     }
 }
