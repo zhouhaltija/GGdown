@@ -30,7 +30,13 @@ class EventOutput:
 
     def success(self, path):
         self.counters["done"] += 1
-        emit("file-done", path=path)
+        # 审查 Important-3：file-done 必须带 size，否则落库 FileSize 为空、带宽统计/去重信息缺失；
+        # 读取失败（文件被移动等）回退 null，C# JsonlParser 对 null size 安全
+        try:
+            size = os.path.getsize(path)
+        except OSError:
+            size = None
+        emit("file-done", path=path, size=size)
 
     def progress(self, bytes_total, bytes_downloaded, bytes_per_second):
         pass

@@ -104,6 +104,8 @@ public class EngineSmokeTests : IDisposable
             await engine.DownloadAsync(plan, "unused", new Progress<EngineEvent>(events.Add));
 
             Assert.Contains(events, e => e.Event == "file-done");
+            // 审查 Important-3 回归覆盖：file-done 必须携带真实文件大小
+            Assert.Contains(events, e => e.Event == "file-done" && e.Size > 0);
             Assert.Contains(events, e => e.Event == "job-done" && e.Total >= 1);
             var downloaded = Directory.GetFiles(_paths.Root, "*", SearchOption.AllDirectories)
                 .Where(f => !f.Contains($"{Path.DirectorySeparatorChar}temp{Path.DirectorySeparatorChar}")
