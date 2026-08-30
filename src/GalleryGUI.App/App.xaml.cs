@@ -54,6 +54,7 @@ public partial class App : Application
         services.AddSingleton<FileDialogService>();
         services.AddSingleton<LauncherService>();
         services.AddSingleton<UsersViewModel>();
+        services.AddSingleton<DownloadsViewModel>(); // B5：下载页 VM（页面缓存 NavigationCacheMode=Enabled，singleton 保持订阅/退订对称）
         services.AddTransient<ImportViewModel>(); // B4：每次打开对话框取新实例（UserInput/ResultMessage 不串台）
         Services = services.BuildServiceProvider();
 
