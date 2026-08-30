@@ -43,6 +43,8 @@ def main():
         if opts.get("fail"):
             emit("fatal", msg="boom")
             return 1
+        if opts.get("crash"):
+            sys.exit(3)  # 审查 Important-1：不发 fatal 直接非零退出，模拟 runner 被杀
         if opts.get("hang"):
             time.sleep(60)
         for url in spec["urls"]:

@@ -173,15 +173,8 @@ public sealed class DownloadQueueService(
         }
         UpdateSnapshot(item.JobId, status: JobStatus.Running);
 
-        var provider = sites.Get(item.SiteId);
-        var target = item.Kind switch
-        {
-            TargetKind.UserMedia => new UserTarget(item.UserId, item.TargetScreenName, item.BaseDirectory),
-            _ => new UserTarget(null, item.TargetScreenName, item.BaseDirectory),
-        };
-        var plan = provider.BuildDownload((ContentKind)item.Kind, target, item.SiteOptions,
-            new DownloadPaths(item.CookieAbsolutePath, item.ArchiveFile));
-
+        // 审查 Important-2：pendingInserts/hasFinal/计数器声明在 try 之前，保证兜底 catch 可见；
+        // provider/target/plan 构造移入 try，BuildDownload/sites.Get 抛异常时兜底 catch 把任务标 Failed（此时 hasFinal=false、计数器为 0）
         long done = 0, skipped = 0, failed = 0;
         long totalFinal = 0, skippedFinal = 0, failedFinal = 0;
         var hasFinal = false;
@@ -195,6 +188,15 @@ public sealed class DownloadQueueService(
 
         try
         {
+            var provider = sites.Get(item.SiteId);
+            var target = item.Kind switch
+            {
+                TargetKind.UserMedia => new UserTarget(item.UserId, item.TargetScreenName, item.BaseDirectory),
+                _ => new UserTarget(null, item.TargetScreenName, item.BaseDirectory),
+            };
+            var plan = provider.BuildDownload((ContentKind)item.Kind, target, item.SiteOptions,
+                new DownloadPaths(item.CookieAbsolutePath, item.ArchiveFile));
+
             var progress = new DelegateProgress<EngineEvent>(ev =>
             {
                 switch (ev.Event)
@@ -228,8 +230,11 @@ public sealed class DownloadQueueService(
 
             await engine.DownloadAsync(plan, item.CookieAbsolutePath, progress, cts.Token);
             await Task.WhenAll(pendingInserts); // 统计聚合前排干在途文件落库（审查 Important-2）
-            await FinishJobAsync(item, JobStatus.Completed, null, hasFinal,
-                totalFinal, skippedFinal, failedFinal, done, skipped, failed);
+            // 双保险（审查 Important-1）：引擎未抛异常但也没发 job-done（理论上被 FIX-1 的退出码检查拦截，
+            // 防御 FakeEngine/未来引擎实现漏发）时不标 Completed
+            await FinishJobAsync(item, hasFinal ? JobStatus.Completed : JobStatus.Failed,
+                hasFinal ? null : "引擎异常退出（未收到 job-done）",
+                hasFinal, totalFinal, skippedFinal, failedFinal, done, skipped, failed);
         }
         catch (AuthException e)
         {
@@ -252,6 +257,15 @@ public sealed class DownloadQueueService(
             await Task.WhenAll(pendingInserts); // 统计聚合前排干在途文件落库（审查 Important-2）
             await FinishJobAsync(item, JobStatus.Failed, e.Message, hasFinal,
                 totalFinal, skippedFinal, failedFinal, done, skipped, failed);
+        }
+        catch (Exception e)
+        {
+            // 审查 Important-2 兜底：内层 try 之前的异常（如未知站点 sites.Get/BuildDownload 抛出）
+            // 原先直接穿透导致任务永久卡 Running；此处先排干插入、标 Failed 再上抛交工作循环记日志
+            await Task.WhenAll(pendingInserts);
+            await FinishJobAsync(item, JobStatus.Failed, e.Message, hasFinal,
+                totalFinal, skippedFinal, failedFinal, done, skipped, failed);
+            throw; // 交 RunWorkerLoopAsync 记日志
         }
         finally
         {
@@ -294,7 +308,9 @@ public sealed class DownloadQueueService(
         job.FinishedAt = DateTime.UtcNow;
         await db.SaveChangesAsync();
 
-        if (status is JobStatus.Completed or JobStatus.Canceled)
+        // 审查 Important-4（控制器裁定）：终态一律聚合。规格 §4.2 DownloadCount 定义不限定任务终态，
+        // 只排除 Failed 会让认证失效中断的文件永不计数（单向门：重下时 archive 命中只算 Skipped）
+        if (status is JobStatus.Completed or JobStatus.Canceled or JobStatus.Failed)
             await stats.ApplyJobCompletionAsync(item.JobId);
 
         var snapshot = UpdateSnapshot(item.JobId, status: status, error: error,

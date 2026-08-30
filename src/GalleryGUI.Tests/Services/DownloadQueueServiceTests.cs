@@ -130,6 +130,68 @@ public class DownloadQueueServiceTests : IDisposable
     }
 
     [Fact]
+    public async Task Download_without_job_done_marks_job_failed()
+    {
+        // 审查 Important-1 回归覆盖（队列侧双保险）：引擎正常返回但未发 job-done → 不得标 Completed
+        _engine.OnDownload = (plan, cookies, progress, _) =>
+        {
+            progress.Report(new EngineEvent("file-start", Path: "D:/x/1_a_1.jpg", ItemId: "1"));
+            progress.Report(new EngineEvent("file-done", Path: "D:/x/1_a_1.jpg", Size: 100));
+            return Task.CompletedTask;
+        };
+
+        await _queue.EnqueueUserMediaAsync(_account, [_alice], @"D:\dl", Opts());
+        await WaitUntil(() => _queue.Active.Count == 0);
+
+        var job = await _db.Jobs.AsNoTracking().SingleAsync();
+        Assert.Equal(JobStatus.Failed, job.Status);
+        Assert.Contains("未收到 job-done", job.ErrorMessage);
+    }
+
+    [Fact]
+    public async Task Unknown_site_fails_job_and_fires_job_removed()
+    {
+        // 审查 Important-2 回归覆盖：sites.Get 在内层 try 之前抛异常，兜底 catch 须把任务标 Failed
+        var removed = new List<long>();
+        _queue.JobRemoved += s => removed.Add(s.JobId);
+        var account = new Account
+        { SiteId = "nope", CookiePath = "nope\\c\\cookies.txt", Status = AccountStatus.Ok, IsActive = true, AddedAt = DateTime.UtcNow };
+        var user = new User
+        { SiteId = "nope", RestId = "9", ScreenName = "nope_user", Source = UserSource.Following, AddedAt = DateTime.UtcNow, UpdatedAt = DateTime.UtcNow };
+        _db.Accounts.Add(account);
+        _db.Users.Add(user);
+        _db.SaveChanges();
+
+        await _queue.EnqueueUserMediaAsync(account, [user], @"D:\dl", Opts());
+        await WaitUntil(() => _queue.Active.Count == 0);
+
+        var job = await _db.Jobs.AsNoTracking().SingleAsync();
+        Assert.Equal(JobStatus.Failed, job.Status);
+        Assert.Contains("未知站点", job.ErrorMessage);
+        Assert.Contains(job.Id, removed);
+        Assert.DoesNotContain(_engine.Downloads, d => d.Plan.SiteId == "nope"); // FakeEngine 未被调到
+    }
+
+    [Fact]
+    public async Task Engine_failure_still_aggregates_stats()
+    {
+        // 审查 Important-4 回归覆盖（控制器裁定：终态一律聚合）：非 auth 引擎失败、已有 file-done 落库，
+        // 任务 Failed 后统计聚合仍须执行，否则 DownloadCount 永久少计
+        _engine.OnDownload = (plan, cookies, progress, _) =>
+        {
+            progress.Report(new EngineEvent("file-done", Path: "D:/x/1_a_1.jpg", Size: 100));
+            throw new EngineException("boom");
+        };
+
+        var jobId = await _queue.EnqueueUserMediaAsync(_account, [_alice], @"D:\dl", Opts());
+        await WaitUntil(() => _queue.Active.Count == 0);
+
+        var job = await _db.Jobs.AsNoTracking().SingleAsync();
+        Assert.Equal(JobStatus.Failed, job.Status);
+        Assert.Contains(jobId, _stats.AppliedJobIds);
+    }
+
+    [Fact]
     public async Task RecoverOnStartup_marks_stale_jobs_failed()
     {
         _db.Jobs.Add(new DownloadJob

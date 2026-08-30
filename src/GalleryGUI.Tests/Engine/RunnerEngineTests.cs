@@ -106,6 +106,19 @@ public class RunnerEngineTests : IDisposable
     }
 
     [SkippableFact]
+    public async Task Download_nonzero_exit_without_fatal_throws_EngineException()
+    {
+        // 审查 Important-1 回归覆盖：runner 非零退出且未发 fatal/job-done 时不得静默当成功
+        var python = LocatePython();
+        Skip.If(python is null, "本机无 Python");
+        var plan = new DownloadPlan("twitter", ["https://x.com/alice/media"],
+            _paths.Root, new Dictionary<string, object?> { ["crash"] = true });
+        var ex = await Assert.ThrowsAsync<EngineException>(() =>
+            CreateEngine(python!).DownloadAsync(plan, "good.txt", new Progress<EngineEvent>()));
+        Assert.Contains("runner 异常退出", ex.Message);
+    }
+
+    [SkippableFact]
     public async Task Download_cancel_kills_process()
     {
         var python = LocatePython();

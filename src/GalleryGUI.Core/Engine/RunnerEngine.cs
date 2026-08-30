@@ -84,7 +84,11 @@ public sealed class RunnerEngine(IAppPaths paths, RunnerEngineOptions options, I
 
             var args = new List<string>
             { "download", "--site", plan.SiteId, "--cookies", cookiesFile, "--job", jobFile };
-            await RunAsync(args, progress.Report, ct, killOnCancel: true);
+            // 审查 Important-1：runner 非零退出且未发 fatal（如被系统 OOM 杀掉）时不能静默当成功，
+            // 未收到 job-done 的下载必须抛异常交给队列标 Failed
+            var result = await RunAsync(args, progress.Report, ct, killOnCancel: true);
+            if (result.ExitCode != 0)
+                throw new EngineException($"runner 异常退出（退出码 {result.ExitCode}）：{result.StderrTail}");
         }
         finally
         {
@@ -119,6 +123,15 @@ public sealed class RunnerEngine(IAppPaths paths, RunnerEngineOptions options, I
         foreach (var a in args) psi.ArgumentList.Add(a);
         if (!string.IsNullOrEmpty(options.GalleryDlPath))
             psi.EnvironmentVariables["PYTHONPATH"] = options.GalleryDlPath;
+
+        // 审查 Important-2：PythonExe 指向具体文件但缺失时，Win32Exception 在 p.Start() 才抛出且信息晦涩，
+        // 这里提前给出明确原因（引擎未播种）。裸命令名（如 "python"）由 Process.Start 走 PATH 解析，
+        // File.Exists 无法判定，缺失时仍由 p.Start() 抛 Win32Exception → 队列兜底 catch 标 Failed。
+        var pythonIsPath = Path.IsPathRooted(options.PythonExe)
+            || options.PythonExe.Contains(Path.DirectorySeparatorChar)
+            || options.PythonExe.Contains(Path.AltDirectorySeparatorChar);
+        if (pythonIsPath && !File.Exists(options.PythonExe))
+            throw new EngineException($"引擎未安装：找不到 {options.PythonExe}（首次启动会从安装目录播种 engine）");
 
         var p = new Process { StartInfo = psi };
         p.Start();
