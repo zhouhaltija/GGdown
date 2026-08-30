@@ -1,24 +1,23 @@
-using System.Runtime.InteropServices;
 using Windows.Storage.Pickers;
 
 namespace GalleryGUI.App.Infrastructure;
 
 /// <summary>
 /// 文件/文件夹选择对话框封装（B4 导入 cookies.txt、B7 浏览目录消费）。
-/// 解包应用（WindowsPackageType=None）中 Picker 必须经 InitializeWithWindow 绑定 HWND，
-/// 这里在调用时（UI 线程事件处理中）取当前线程的活动窗口句柄。
-/// 若后续任务（B4/B7）brief 给出更具体的签名需求，可在此基础上调整。
+/// 解包应用（WindowsPackageType=None）中 Picker 必须经 InitializeWithWindow 绑定 HWND——
+/// B1 版本在调用时用 GetActiveWindow/GetForegroundWindow 启发式取句柄（B1 审查遗留问题：
+/// 死参数 displayName + 不可靠的活动窗口探测），控制器裁定改为属主注入：
+/// App.OnLaunched 创建 MainWindow 后调用 SetOwner 注入主窗口句柄，Pick 系列用该句柄初始化 Picker。
 /// </summary>
 public sealed class FileDialogService
 {
-    [DllImport("user32.dll")]
-    private static extern IntPtr GetActiveWindow();
+    private IntPtr _owner;
 
-    [DllImport("user32.dll")]
-    private static extern IntPtr GetForegroundWindow();
+    /// <summary>注入 Picker 的属主窗口句柄（MainWindow.WindowHandle，App.OnLaunched 调用）。</summary>
+    public void SetOwner(IntPtr hwnd) => _owner = hwnd;
 
     /// <summary>选择单个文件。patterns 为扩展名过滤器（如 ".txt"）。</summary>
-    public async Task<string?> PickFileAsync(string displayName, params string[] patterns)
+    public async Task<string?> PickFileAsync(params string[] patterns)
     {
         var picker = new FileOpenPicker
         {
@@ -26,7 +25,7 @@ public sealed class FileDialogService
             SuggestedStartLocation = PickerLocationId.DocumentsLibrary,
         };
         foreach (var pattern in patterns) picker.FileTypeFilter.Add(pattern);
-        WinRT.Interop.InitializeWithWindow.Initialize(picker, GetWindowHandle());
+        WinRT.Interop.InitializeWithWindow.Initialize(picker, RequireOwner());
         var file = await picker.PickSingleFileAsync();
         return file?.Path;
     }
@@ -38,10 +37,12 @@ public sealed class FileDialogService
         {
             SuggestedStartLocation = PickerLocationId.DocumentsLibrary,
         };
-        WinRT.Interop.InitializeWithWindow.Initialize(picker, GetWindowHandle());
+        WinRT.Interop.InitializeWithWindow.Initialize(picker, RequireOwner());
         var folder = await picker.PickSingleFolderAsync();
         return folder?.Path;
     }
 
-    private static IntPtr GetWindowHandle() => GetActiveWindow() != IntPtr.Zero ? GetActiveWindow() : GetForegroundWindow();
+    private IntPtr RequireOwner() => _owner != IntPtr.Zero
+        ? _owner
+        : throw new InvalidOperationException("窗口未初始化");
 }

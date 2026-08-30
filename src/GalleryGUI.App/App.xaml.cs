@@ -27,7 +27,10 @@ public partial class App : Application
     public static Task Readiness => _readyTcs.Task;
 
     public IServiceProvider Services { get; private set; } = null!;
-    private Window? _window;
+    private MainWindow? _window;
+
+    /// <summary>B4：对话框 XamlRoot / Picker 属主句柄的宿主窗口（页面经 App.Current.MainWindow.DialogXamlRoot 取用）。</summary>
+    public MainWindow MainWindow => _window!;
 
     public App() => InitializeComponent();
 
@@ -51,6 +54,7 @@ public partial class App : Application
         services.AddSingleton<FileDialogService>();
         services.AddSingleton<LauncherService>();
         services.AddSingleton<UsersViewModel>();
+        services.AddTransient<ImportViewModel>(); // B4：每次打开对话框取新实例（UserInput/ResultMessage 不串台）
         Services = services.BuildServiceProvider();
 
         ApplyDevEngineOverrides();
@@ -73,6 +77,8 @@ public partial class App : Application
         });
 
         _window = new MainWindow(Services);
+        // B4 控制器裁定：Picker 属主句柄注入（替代 B1 的 GetActiveWindow 启发式），须在窗口创建后
+        Services.GetRequiredService<FileDialogService>().SetOwner(_window.WindowHandle);
         _window.Activate();
     }
 

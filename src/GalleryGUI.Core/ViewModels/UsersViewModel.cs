@@ -270,8 +270,15 @@ public partial class UsersViewModel : ObservableObject
 
     private async Task TogglePinCoreAsync(UserRowViewModel row)
     {
-        await _users.SetPinnedAsync(row.Model.Id, !row.Model.IsPinned);
-        await RefreshAsync(); // 置顶排序键变更，重建列表
+        try
+        {
+            await _users.SetPinnedAsync(row.Model.Id, !row.Model.IsPinned);
+            await RefreshAsync(); // 置顶排序键变更，重建列表
+        }
+        catch (Exception ex) // 控制器裁定 5（B3 审查授权）：fire-and-forget 路径异常不丢出崩 UI 线程
+        {
+            StatusMessage = $"置顶失败：{ex.Message}";
+        }
     }
 
     // 控制器裁定 4：Process.Start(UseShellExecute=true) 放 Core（net8.0 可用）；ProfileUrl 空则用 BuildProfileUrl
@@ -284,9 +291,16 @@ public partial class UsersViewModel : ObservableObject
     }
 
     private void OnAccountInvalid(long accountId, string reason)
-        => _dispatcher.Post(() =>
+        => _dispatcher.Post(async () =>
         {
             StatusMessage = $"登录态失效，请重新导入 Cookie：{reason}";
-            _ = RefreshAsync(); // 刷新 HasAccount 等派生态
+            try
+            {
+                await RefreshAsync(); // 刷新 HasAccount 等派生态
+            }
+            catch (Exception ex) // 控制器裁定 5（B3 审查授权）：fire-and-forget 路径异常不崩 UI 线程
+            {
+                StatusMessage = ex.Message;
+            }
         });
 }

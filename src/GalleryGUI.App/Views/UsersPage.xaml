@@ -59,11 +59,28 @@
                 </controls:DataGridTemplateColumn>
             </controls:DataGrid.Columns>
         </controls:DataGrid>
-        <!-- 空状态（HasUsers=false 时显示；删除不做二次确认，行级删除按钮走行命令直接删） -->
-        <StackPanel Grid.Row="1" VerticalAlignment="Center" HorizontalAlignment="Center" Spacing="8"
+        <!-- 空状态三步引导（HasUsers=false 时覆盖列表显示；brief B4）：
+             ① 导入 Cookie → ImportCookieDialog；② 等待验证；③ 导入关注列表 → ImportFollowingAsync，
+             HasAccount=false 时 ③ 按钮禁用并显示"请先完成第 ① 步" -->
+        <StackPanel Grid.Row="1" VerticalAlignment="Center" HorizontalAlignment="Center" Spacing="16" MaxWidth="520"
                     Visibility="{x:Bind conv:UiConv.ToInverseVisibility(Vm.HasUsers), Mode=OneWay}">
             <TextBlock Text="暂无用户" FontSize="20" HorizontalAlignment="Center"/>
-            <TextBlock Text="点击「添加用户」或「导入关注列表」开始" Opacity="0.7" HorizontalAlignment="Center"/>
+            <StackPanel Orientation="Horizontal" Spacing="8">
+                <TextBlock Text="①" FontWeight="SemiBold" VerticalAlignment="Center"/>
+                <Button Content="导入 Cookie" Click="OnEmptyStateImportCookieClick"/>
+                <TextBlock Text="选择 cookies.txt 验证账号" VerticalAlignment="Center" Opacity="0.7"/>
+            </StackPanel>
+            <StackPanel Orientation="Horizontal" Spacing="8">
+                <TextBlock Text="②" FontWeight="SemiBold" VerticalAlignment="Center"/>
+                <TextBlock Text="等待验证通过" VerticalAlignment="Center" Opacity="0.7"/>
+            </StackPanel>
+            <StackPanel Orientation="Horizontal" Spacing="8">
+                <TextBlock Text="③" FontWeight="SemiBold" VerticalAlignment="Center"/>
+                <Button Content="导入关注列表" IsEnabled="{x:Bind Vm.HasAccount, Mode=OneWay}"
+                        Click="OnEmptyStateImportFollowingClick"/>
+                <TextBlock Text="请先完成第 ① 步" VerticalAlignment="Center" Opacity="0.7"
+                           Visibility="{x:Bind conv:UiConv.ToInverseVisibility(Vm.HasAccount), Mode=OneWay}"/>
+            </StackPanel>
         </StackPanel>
         <!-- 底部操作条：选中计数/按钮随 BottomBarVisible 显隐；StatusMessage 常显（放右侧）——
              若并入显隐容器，删除清空选中后"已删除 N 个用户"恰好被隐藏（偏离 brief 结构，见报告） -->

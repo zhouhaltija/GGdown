@@ -1,0 +1,18 @@
+<ContentDialog x:Class="GalleryGUI.App.Views.Dialogs.ImportCookieDialog"
+               xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+               xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+               Title="导入 Cookie"
+               PrimaryButtonText="导入"
+               CloseButtonText="取消"
+               DefaultButton="Primary"
+               IsPrimaryButtonEnabled="False">
+    <StackPanel Spacing="12" MinWidth="420">
+        <TextBlock Text="选择从浏览器导出的 cookies.txt（Netscape 格式），导入后将验证账号并设为活动账号。"
+                   TextWrapping="Wrap"/>
+        <!-- 规格 §3.5 硬要求：明文警告文案必须逐字（审查会核对） -->
+        <TextBlock Text="Cookie 将明文保存在本机，等同于浏览器登录态，请勿分享给他人"
+                   Foreground="Orange" FontWeight="SemiBold" TextWrapping="Wrap"/>
+        <Button Content="选择 cookies.txt 文件" Click="OnPickFileClick"/>
+        <TextBlock x:Name="PathText" Opacity="0.8" TextWrapping="Wrap"/>
+    </StackPanel>
+</ContentDialog>
