@@ -39,6 +39,7 @@ public partial class App : Application
     {
         var paths = AppPaths.CreateDefault();
         paths.EnsureCreated();
+        ApplyRuntimeSeeding(paths);
         Log.Logger = new LoggerConfiguration()
             .MinimumLevel.Information()
             .WriteTo.File(
@@ -110,6 +111,42 @@ public partial class App : Application
 
     /// <summary>DEBUG：引擎用仓库源码 + PATH python（与 E2E 相同），免去播种。</summary>
     partial void ApplyDevEngineOverrides();
+
+    /// <summary>
+    /// Phase C 首启播种（RELEASE/DEBUG 均生效）：安装版引擎随安装目录分发，
+    /// 而 AppPaths 指向 %LOCALAPPDATA%\GalleryGUI\engine。首次启动时把
+    /// 安装目录 engine（AppContext.BaseDirectory\engine）一次性复制到
+    /// appdata 引擎目录；已存在则跳过（幂等）；失败仅记日志不崩溃。
+    /// </summary>
+    private void ApplyRuntimeSeeding(AppPaths paths)
+    {
+        try
+        {
+            var bundledEngine = Path.Combine(AppContext.BaseDirectory, "engine");
+            if (File.Exists(paths.PythonExe) || !Directory.Exists(bundledEngine))
+                return;
+
+            Log.Information("首启播种：复制安装目录引擎 {Source} -> {Target}", bundledEngine, paths.EngineDir);
+            CopyDirectory(bundledEngine, paths.EngineDir);
+            Log.Information("首启播种完成");
+        }
+        catch (Exception ex)
+        {
+            Log.Error(ex, "首启播种失败（不阻断启动）");
+        }
+    }
+
+    private static void CopyDirectory(string sourceDir, string targetDir)
+    {
+        Directory.CreateDirectory(targetDir);
+        foreach (var file in Directory.EnumerateFiles(sourceDir, "*", SearchOption.AllDirectories))
+        {
+            var relative = Path.GetRelativePath(sourceDir, file);
+            var target = Path.Combine(targetDir, relative);
+            Directory.CreateDirectory(Path.GetDirectoryName(target)!);
+            File.Copy(file, target, overwrite: true);
+        }
+    }
 }
 
 #if DEBUG
