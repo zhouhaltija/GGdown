@@ -10,7 +10,7 @@ import traceback
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-from sites import AuthError, EventHandler, classify_error, emit, emit_hello
+from sites import AuthError, EventHandler, apply_proxy_from_env, classify_error, emit, emit_hello
 
 
 class EventOutput:
@@ -115,6 +115,8 @@ def main(argv=None):
         if name == "download":
             sp.add_argument("--job", required=True)
     args = p.parse_args(argv)
+    if args.cmd != "hello":
+        apply_proxy_from_env()
 
     if args.cmd == "hello":
         emit_hello()

@@ -88,4 +88,39 @@ public class UserServiceTests : IDisposable
         // 适配：ExecuteUpdate 绕过变更跟踪器，同一 DbContext 的跟踪查询会返回陈旧实例，用 AsNoTracking 读库中真实状态
         Assert.True(_t.Item2.Users.AsNoTracking().Single(x => x.Id == u.Id).IsPinned);
     }
+
+    [Fact]
+    public async Task SetSkipped_toggles_and_import_preserves_flag()
+    {
+        var u = await _svc.AddUserAsync(_account, "alice");
+        await _svc.SetSkippedAsync([u.Id], true);
+        Assert.True(_t.Item2.Users.AsNoTracking().Single(x => x.Id == u.Id).IsSkipped);
+
+        _engine.NextFollowing = [new SiteUserInfo(u.RestId, "alice", "Alice", "https://x/a.png")];
+        await _svc.ImportFollowingAsync(_account);
+        Assert.True(_t.Item2.Users.AsNoTracking().Single(x => x.RestId == u.RestId).IsSkipped);
+
+        await _svc.SetSkippedAsync([u.Id], false);
+        Assert.False(_t.Item2.Users.AsNoTracking().Single(x => x.Id == u.Id).IsSkipped);
+    }
+
+    [Fact]
+    public async Task SetInDownloadList_toggles_and_skip_removes_from_list()
+    {
+        var u = await _svc.AddUserAsync(_account, "alice");
+        await _svc.SetInDownloadListAsync([u.Id], true);
+        Assert.True(_t.Item2.Users.AsNoTracking().Single(x => x.Id == u.Id).InDownloadList);
+
+        await _svc.SetSkippedAsync([u.Id], true);
+        Assert.False(_t.Item2.Users.AsNoTracking().Single(x => x.Id == u.Id).InDownloadList);
+    }
+
+    [Fact]
+    public async Task SetInDownloadList_does_not_add_skipped_user()
+    {
+        var u = await _svc.AddUserAsync(_account, "alice");
+        await _svc.SetSkippedAsync([u.Id], true);
+        await _svc.SetInDownloadListAsync([u.Id], true);
+        Assert.False(_t.Item2.Users.AsNoTracking().Single(x => x.Id == u.Id).InDownloadList);
+    }
 }

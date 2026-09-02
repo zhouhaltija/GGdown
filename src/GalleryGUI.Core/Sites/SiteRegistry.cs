@@ -12,5 +12,7 @@ public sealed class SiteRegistry
             ? p
             : throw new KeyNotFoundException($"未知站点：{siteId}");
 
+    public bool IsRegistered(string siteId) => _byId.ContainsKey(siteId);
+
     public IReadOnlyList<ISiteProvider> All => [.. _byId.Values];
 }

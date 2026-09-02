@@ -3,6 +3,7 @@ using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using GalleryGUI.Paths;
+using GalleryGUI.Settings;
 using GalleryGUI.Sites;
 using Microsoft.Extensions.Logging;
 
@@ -16,7 +17,8 @@ public sealed class RunnerEngineOptions
     public TimeSpan HandshakeTimeout { get; set; } = TimeSpan.FromSeconds(30);
 }
 
-public sealed class RunnerEngine(IAppPaths paths, RunnerEngineOptions options, ILogger<RunnerEngine> log)
+public sealed class RunnerEngine(
+    IAppPaths paths, RunnerEngineOptions options, ILogger<RunnerEngine> log, IAppSettings? settings = null)
     : IDownloadEngine
 {
     private static readonly JsonSerializerOptions JobJson = new(JsonSerializerDefaults.Web)
@@ -75,10 +77,13 @@ public sealed class RunnerEngine(IAppPaths paths, RunnerEngineOptions options, I
         var jobFile = Path.Combine(paths.TempDir, $"job-{Guid.NewGuid():N}.json");
         try
         {
+            var planOptions = plan.Options;
+            if (settings is not null)
+                planOptions = ProxyConfig.MergeIntoOptions(planOptions, (await settings.GetProxyAsync(ct)).ToUrl());
             var payload = new Dictionary<string, object?>
             {
                 ["urls"] = plan.Urls,
-                ["options"] = plan.Options,
+                ["options"] = planOptions,
             };
             await File.WriteAllTextAsync(jobFile, JsonSerializer.Serialize(payload, JobJson), ct);
 
@@ -120,11 +125,18 @@ public sealed class RunnerEngine(IAppPaths paths, RunnerEngineOptions options, I
             CreateNoWindow = true,
             RedirectStandardOutput = true,
             RedirectStandardError = true,
+            StandardOutputEncoding = Encoding.UTF8,
+            StandardErrorEncoding = Encoding.UTF8,
         };
         psi.ArgumentList.Add(options.RunnerScript);
         foreach (var a in args) psi.ArgumentList.Add(a);
         if (!string.IsNullOrEmpty(options.GalleryDlPath))
             psi.EnvironmentVariables["PYTHONPATH"] = options.GalleryDlPath;
+        // Windows 控制台默认 GBK，用户昵称含 ⋆ 等字符会在 runner/gallery-dl 打印时炸
+        psi.Environment["PYTHONUTF8"] = "1";
+        psi.Environment["PYTHONIOENCODING"] = "utf-8";
+        var proxyUrl = settings is null ? null : (await settings.GetProxyAsync(ct)).ToUrl();
+        ProxyConfig.ApplyTo(psi, proxyUrl);
 
         // 审查 Important-2：PythonExe 指向具体文件但缺失时，Win32Exception 在 p.Start() 才抛出且信息晦涩，
         // 这里提前给出明确原因（引擎未播种）。裸命令名（如 "python"）由 Process.Start 走 PATH 解析，

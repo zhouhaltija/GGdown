@@ -23,15 +23,35 @@
                 <NumberBox Value="{x:Bind Vm.Concurrency, Mode=TwoWay}" Minimum="1" SmallChange="1" LargeChange="1"
                            SpinButtonPlacementMode="Compact" Width="160"/>
             </controls:SettingsCard>
+            <controls:SettingsCard Header="网络代理" Description="验证 Cookie、导入关注、下载均走此代理。本机 v2rayN：SOCKS 口（常见 10808）选 socks5h；HTTP 口（10809/7890）选 http。不要选 https。主机留空为直连。">
+                <StackPanel Orientation="Horizontal" Spacing="8">
+                    <ComboBox ItemsSource="{x:Bind Vm.ProxySchemeChoices}"
+                              SelectedItem="{x:Bind Vm.ProxyScheme, Mode=TwoWay}"
+                              MinWidth="110" VerticalAlignment="Center"/>
+                    <TextBox PlaceholderText="主机" Text="{x:Bind Vm.ProxyHost, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
+                             MinWidth="140" VerticalAlignment="Center"/>
+                    <NumberBox PlaceholderText="端口" Value="{x:Bind Vm.ProxyPort, Mode=TwoWay}"
+                               Minimum="0" Maximum="65535" SmallChange="1"
+                               SpinButtonPlacementMode="Compact" Width="120"/>
+                    <TextBox PlaceholderText="用户名（可选）" Text="{x:Bind Vm.ProxyUsername, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
+                             MinWidth="100" VerticalAlignment="Center"/>
+                    <TextBox PlaceholderText="密码（可选）" Text="{x:Bind Vm.ProxyPassword, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
+                             MinWidth="100" VerticalAlignment="Center"/>
+                    <Button Content="保存" Style="{StaticResource AccentButtonStyle}"
+                            Command="{x:Bind Vm.SaveGeneralCommand}"/>
+                </StackPanel>
+            </controls:SettingsCard>
 
             <!-- —— 账号：无账号 → 导入按钮；有账号 → 昵称/@handle/状态徽标 + 重新验证/更换 Cookie —— -->
             <TextBlock Text="账号" FontSize="18" FontWeight="SemiBold" Margin="0,8,0,0"/>
-            <controls:SettingsCard Header="X (Twitter) 账号" Description="导入浏览器导出的 cookies.txt 并自动验证"
-                                   Visibility="{x:Bind conv:UiConv.ToInverseVisibility(Vm.HasAccount), Mode=OneWay}">
+            <TextBlock Text="{x:Bind Vm.ComingSoonMessage, Mode=OneWay}" Opacity="0.8" TextWrapping="Wrap"
+                       Visibility="{x:Bind conv:UiConv.ToVisibility(Vm.ShowComingSoon), Mode=OneWay}"/>
+            <controls:SettingsCard Header="{x:Bind Vm.AccountSiteHeader, Mode=OneWay}" Description="导入浏览器导出的 cookies.txt 并自动验证"
+                                   Visibility="{x:Bind conv:UiConv.ToVisibility(Vm.ShowAccountImport), Mode=OneWay}">
                 <Button Content="导入 Cookie" Style="{StaticResource AccentButtonStyle}" Click="OnImportCookieClick"/>
             </controls:SettingsCard>
             <controls:SettingsCard Header="{x:Bind Vm.AccountTitle, Mode=OneWay}"
-                                   Visibility="{x:Bind conv:UiConv.ToVisibility(Vm.HasAccount), Mode=OneWay}">
+                                   Visibility="{x:Bind conv:UiConv.ToVisibility(Vm.ShowAccountCard), Mode=OneWay}">
                 <controls:SettingsCard.Description>
                     <StackPanel Orientation="Horizontal" Spacing="8">
                         <TextBlock Text="{x:Bind Vm.AccountHandle, Mode=OneWay}"/>
@@ -49,9 +69,11 @@
 
             <!-- —— 站点选项：OptionItem 按 Kind 切换控件（Boolean→ToggleSwitch、Text/Choice→TextBox，
                  裁定 2：单模板 + x:Bind 函数可见性切换，简洁优先）—— -->
-            <TextBlock Text="站点选项 · X (Twitter)" FontSize="18" FontWeight="SemiBold" Margin="0,8,0,0"/>
+            <TextBlock Text="{x:Bind Vm.OptionsHeader, Mode=OneWay}" FontSize="18" FontWeight="SemiBold" Margin="0,8,0,0"
+                       Visibility="{x:Bind conv:UiConv.ToVisibility(Vm.IsSiteAvailable), Mode=OneWay}"/>
             <Grid Padding="12" CornerRadius="4" Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
-                  BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}" BorderThickness="1">
+                  BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}" BorderThickness="1"
+                  Visibility="{x:Bind conv:UiConv.ToVisibility(Vm.IsSiteAvailable), Mode=OneWay}">
                 <StackPanel Spacing="8">
                     <ItemsControl ItemsSource="{x:Bind Vm.TwitterOptions, Mode=OneWay}">
                         <ItemsControl.ItemTemplate>

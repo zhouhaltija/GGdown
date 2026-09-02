@@ -13,6 +13,8 @@ public interface IUserService
     Task<User> AddUserAsync(Account account, string input, CancellationToken ct = default);
     Task RemoveAsync(IReadOnlyList<long> userIds, CancellationToken ct = default);
     Task SetPinnedAsync(long userId, bool pinned, CancellationToken ct = default);
+    Task SetSkippedAsync(IReadOnlyList<long> userIds, bool skipped, CancellationToken ct = default);
+    Task SetInDownloadListAsync(IReadOnlyList<long> userIds, bool inList, CancellationToken ct = default);
 }
 
 public sealed class UserService(
@@ -57,6 +59,24 @@ public sealed class UserService(
     {
         await db.Users.Where(u => u.Id == userId)
             .ExecuteUpdateAsync(s => s.SetProperty(u => u.IsPinned, pinned), ct);
+    }
+
+    public async Task SetSkippedAsync(IReadOnlyList<long> userIds, bool skipped, CancellationToken ct = default)
+    {
+        if (userIds.Count == 0) return;
+        await db.Users.Where(u => userIds.Contains(u.Id))
+            .ExecuteUpdateAsync(s => skipped
+                ? s.SetProperty(u => u.IsSkipped, true).SetProperty(u => u.InDownloadList, false)
+                : s.SetProperty(u => u.IsSkipped, false), ct);
+    }
+
+    public async Task SetInDownloadListAsync(IReadOnlyList<long> userIds, bool inList, CancellationToken ct = default)
+    {
+        if (userIds.Count == 0) return;
+        var q = db.Users.Where(u => userIds.Contains(u.Id));
+        if (inList)
+            q = q.Where(u => !u.IsSkipped);
+        await q.ExecuteUpdateAsync(s => s.SetProperty(u => u.InDownloadList, inList), ct);
     }
 
     private async Task<User> UpsertAsync(

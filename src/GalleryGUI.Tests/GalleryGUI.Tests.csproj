@@ -17,5 +17,6 @@
   </ItemGroup>
   <ItemGroup>
     <None Include="Fixtures\stub_runner.py" CopyToOutputDirectory="PreserveNewest" />
+    <None Include="..\GalleryGUI.App\Views\UsersPage.xaml" Link="XamlFixtures\UsersPage.xaml" CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
 </Project>

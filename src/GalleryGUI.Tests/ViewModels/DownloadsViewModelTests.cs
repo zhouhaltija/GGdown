@@ -26,14 +26,16 @@ public class DownloadsViewModelTests : IDisposable
     private readonly GalleryDbContext _db;
     private readonly DownloadQueueService _queue;
     private readonly DownloadsViewModel _vm;
+    private readonly FakeCurrentSite _site = new();
     private readonly Account _account;
     private readonly User _alice;
+    private readonly SingleDbContextFactory _factory;
 
     public DownloadsViewModelTests()
     {
         _t = TestDb.Create();
         _db = _t.Item2;
-        var factory = new SingleDbContextFactory(_db);
+        _factory = new SingleDbContextFactory(_db);
         _account = new Account
         { SiteId = "twitter", CookiePath = "c", Status = AccountStatus.Ok, IsActive = true, AddedAt = DateTime.UtcNow };
         _alice = new User
@@ -42,12 +44,16 @@ public class DownloadsViewModelTests : IDisposable
         _db.Users.Add(_alice);
         _db.SaveChanges();
         var sites = new SiteRegistry([new TwitterSiteProvider()]);
-        var settings = new AppSettings(factory, sites);
-        _queue = new DownloadQueueService(factory, _engine, new FakeStats(), _paths, sites,
+        var settings = new AppSettings(_factory, sites);
+        _queue = new DownloadQueueService(_factory, _engine, new FakeStats(), _paths, sites,
             NullLogger<DownloadQueueService>.Instance);
-        _vm = new DownloadsViewModel(_queue, new AccountQueryService(factory), settings, new SyncDispatcher());
+        _vm = CreateVm(_site);
         _vm.Start(); // 页面 OnNavigatedTo 的等价调用：订阅 + 播种 + HasAccount 刷新
     }
+
+    private DownloadsViewModel CreateVm(ICurrentSite site) =>
+        new(_queue, new AccountQueryService(_factory), new AppSettings(_factory, new SiteRegistry([new TwitterSiteProvider()])),
+            new SyncDispatcher(), site, new UserQueryService(_factory), _factory);
 
     public void Dispose()
     {
@@ -177,6 +183,134 @@ public class DownloadsViewModelTests : IDisposable
         Assert.Empty(_vm.Jobs);          // 未产生任何任务
         Assert.False(_vm.HasActive);
         Assert.Empty(_engine.Downloads); // 引擎未被触达
+    }
+
+    [Fact]
+    public async Task Start_loads_download_list_excluding_skipped()
+    {
+        _alice.InDownloadList = true;
+        _db.Users.AddRange(
+            new User { SiteId = "twitter", RestId = "2", ScreenName = "bob", Source = UserSource.Following, InDownloadList = true, IsSkipped = true, AddedAt = DateTime.UtcNow, UpdatedAt = DateTime.UtcNow },
+            new User { SiteId = "twitter", RestId = "3", ScreenName = "carol", DisplayName = "Carol", Source = UserSource.Following, InDownloadList = true, AddedAt = DateTime.UtcNow, UpdatedAt = DateTime.UtcNow });
+        _db.SaveChanges();
+        await _site.SelectAsync("twitter");
+        await WaitUntil(() => _vm.DownloadList.Count == 2);
+
+        Assert.True(_vm.HasDownloadList);
+        Assert.Equal("待下载清单（2）", _vm.DownloadListHeader);
+        Assert.Equal(["alice", "Carol"], _vm.DownloadList.Select(i => i.Title));
+        Assert.Equal("@carol", _vm.DownloadList.Single(i => i.Title == "Carol").Subtitle);
+    }
+
+    [Fact]
+    public async Task StartDownloadList_enqueues_all_and_keeps_list()
+    {
+        _alice.InDownloadList = true;
+        _db.Users.Add(new User { SiteId = "twitter", RestId = "2", ScreenName = "bob", Source = UserSource.Following, InDownloadList = true, AddedAt = DateTime.UtcNow, UpdatedAt = DateTime.UtcNow });
+        _db.SaveChanges();
+        await _site.SelectAsync("twitter");
+        await WaitUntil(() => _vm.DownloadList.Count == 2);
+
+        var gate = new TaskCompletionSource();
+        _engine.OnDownload = async (_, _, _, _) => await gate.Task;
+
+        await _vm.StartDownloadListCommand.ExecuteAsync(null);
+        await WaitUntil(() => _vm.Jobs.Count == 2);
+
+        Assert.Contains("已加入下载队列", _vm.StatusMessage);
+        Assert.Contains("2 个用户", _vm.StatusMessage);
+        Assert.Equal(2, _vm.DownloadList.Count);
+        Assert.All(_db.Users.AsNoTracking().Where(u => u.InDownloadList), u => Assert.True(u.InDownloadList));
+        Assert.Equal(2, _db.Jobs.Count());
+
+        gate.SetResult();
+        await WaitUntil(() => _vm.Jobs.Count == 0);
+    }
+
+    [Fact]
+    public async Task Remove_from_download_list_clears_flag()
+    {
+        _alice.InDownloadList = true;
+        _db.SaveChanges();
+        await _site.SelectAsync("twitter");
+        await WaitUntil(() => _vm.DownloadList.Count == 1);
+
+        await _vm.DownloadList[0].RemoveCommand.ExecuteAsync(null);
+        await WaitUntil(() => _vm.DownloadList.Count == 0);
+
+        Assert.False(_vm.HasDownloadList);
+        Assert.Equal("待下载清单（0）", _vm.DownloadListHeader);
+        Assert.False(_db.Users.AsNoTracking().Single(u => u.Id == _alice.Id).InDownloadList);
+    }
+
+    [Fact]
+    public async Task StartDownloadList_empty_sets_message()
+    {
+        await WaitUntil(() => _vm.HasAccount);
+        await _vm.StartDownloadListCommand.ExecuteAsync(null);
+        Assert.Contains("清单为空", _vm.StatusMessage);
+        Assert.Empty(_vm.Jobs);
+        Assert.Empty(_engine.Downloads);
+    }
+
+    [Fact]
+    public async Task StartDownloadList_blocked_without_account()
+    {
+        _alice.InDownloadList = true;
+        await _db.Accounts.ExecuteDeleteAsync();
+        _db.SaveChanges();
+        await _site.SelectAsync("twitter");
+        await WaitUntil(() => _vm.DownloadList.Count == 1);
+
+        await _vm.StartDownloadListCommand.ExecuteAsync(null);
+        Assert.Contains("请先在设置中导入 Cookie", _vm.StatusMessage);
+        Assert.Empty(_vm.Jobs);
+        Assert.Empty(_engine.Downloads);
+    }
+
+    [Fact]
+    public async Task Switching_site_reloads_download_list()
+    {
+        _alice.InDownloadList = true;
+        _db.SaveChanges();
+        var site = new FakeCurrentSite();
+        var vm = CreateVm(site);
+        vm.Start();
+        await WaitUntil(() => vm.DownloadList.Count == 1);
+
+        await site.SelectAsync("pixiv");
+        Assert.Empty(vm.DownloadList);
+        Assert.False(vm.HasDownloadList);
+
+        await site.SelectAsync("twitter");
+        Assert.Single(vm.DownloadList);
+    }
+
+    [Fact]
+    public async Task Switching_site_hides_other_site_jobs_without_canceling()
+    {
+        var site = new FakeCurrentSite();
+        var vm = CreateVm(site);
+        vm.Start();
+
+        var gate = new TaskCompletionSource();
+        _engine.OnDownload = async (_, _, _, _) => await gate.Task;
+
+        await _queue.EnqueueUserMediaAsync(_account, [_alice], @"D:\dl", Opts());
+        await WaitUntil(() => vm.Jobs.Count == 1);
+
+        await site.SelectAsync("pixiv");
+        Assert.Empty(vm.Jobs);
+        Assert.False(vm.HasActive);
+        Assert.True(vm.ShowComingSoon);
+        Assert.Single(_queue.Active); // 后台仍在跑，只是 UI 不展示
+
+        await site.SelectAsync("twitter");
+        Assert.Single(vm.Jobs);
+        Assert.True(vm.HasActive);
+
+        gate.SetResult();
+        await WaitUntil(() => vm.Jobs.Count == 0);
     }
 
     // 审查 Important-1 回归：Stop 窗口内任务终态（JobChanged/JobRemoved 均丢失）→ 重新 Start 后无幽灵卡片残留

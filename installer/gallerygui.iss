@@ -21,6 +21,7 @@ Compression=lzma2/max
 SolidCompression=yes
 ArchitecturesInstallIn64BitMode=x64compatible
 UninstallDisplayIcon={app}\GalleryGUI.exe
+SetupIconFile={#RepoRoot}\src\GalleryGUI.App\Assets\app.ico
 ; User data under {localappdata}\GalleryGUI is intentionally preserved on uninstall.
 UninstallFilesDir={app}\unins
 

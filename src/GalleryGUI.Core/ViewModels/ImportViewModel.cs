@@ -13,22 +13,25 @@ namespace GalleryGUI.ViewModels;
 /// </summary>
 public partial class ImportViewModel : ObservableObject
 {
-    private const string SiteId = "twitter"; // 同 UsersViewModel：Phase B 仅接入 X (Twitter)
-
+    private readonly ICurrentSite _currentSite;
     private readonly IAccountService _accounts;
     private readonly IUserService _users;
     private readonly IAccountQueryService _accountQuery;
     private readonly IUiDispatcher _dispatcher;
     private readonly SiteRegistry _sites;
 
+    private string SiteId => _currentSite.SiteId;
+
     public ImportViewModel(IAccountService accounts, IUserService users,
-        IAccountQueryService accountQuery, IUiDispatcher dispatcher, SiteRegistry sites)
+        IAccountQueryService accountQuery, IUiDispatcher dispatcher, SiteRegistry sites,
+        ICurrentSite currentSite)
     {
         _accounts = accounts;
         _users = users;
         _accountQuery = accountQuery;
         _dispatcher = dispatcher;
         _sites = sites;
+        _currentSite = currentSite;
     }
 
     [ObservableProperty]
@@ -49,6 +52,11 @@ public partial class ImportViewModel : ObservableObject
     /// <summary>输入即时校验（ParseInput）；UserInput 变更时自动触发（等价 brief 的"每次 TextChanged 调用"）。</summary>
     public void ValidateUserInput()
     {
+        if (!_currentSite.IsAvailable || !_sites.IsRegistered(SiteId))
+        {
+            UserInputError = $"{_currentSite.Current.DisplayName} 即将支持";
+            return;
+        }
         var parsed = _sites.Get(SiteId).ParseInput(UserInput ?? "");
         UserInputError = parsed.Ok ? null : parsed.Error;
     }

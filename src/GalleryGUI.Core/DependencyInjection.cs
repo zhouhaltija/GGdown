@@ -39,6 +39,7 @@ public static class CoreServices
         // Task B2 落地：查询服务与 AppSettings（brief Step 4 四处注册）。
         // AppSettings 注入 IDbContextFactory（控制器裁定修复 captive dependency），singleton 安全。
         services.AddSingleton<IAppSettings, AppSettings>();
+        services.AddSingleton<ICurrentSite, CurrentSite>();
         services.AddSingleton<IUserQueryService, UserQueryService>();
         services.AddSingleton<IAccountQueryService, AccountQueryService>();
         services.AddSingleton<IHistoryQueryService, HistoryQueryService>();

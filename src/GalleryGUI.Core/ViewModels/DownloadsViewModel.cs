@@ -6,6 +6,7 @@ using GalleryGUI.Services;
 using GalleryGUI.Settings;
 using GalleryGUI.Sites;
 using GalleryGUI.Threading;
+using Microsoft.EntityFrameworkCore;
 
 namespace GalleryGUI.ViewModels;
 
@@ -88,33 +89,58 @@ public sealed partial class JobCardViewModel : ObservableObject
     }
 }
 
+/// <summary>下载页待下载清单行：展示用户并允许移出清单（清单本身持久在 User.InDownloadList）。</summary>
+public sealed class DownloadListItemViewModel
+{
+    public DownloadListItemViewModel(User model, Func<DownloadListItemViewModel, Task> remove)
+    {
+        Model = model;
+        RemoveCommand = new AsyncRelayCommand(() => remove(this));
+    }
+
+    public User Model { get; }
+    public string Title => string.IsNullOrWhiteSpace(Model.DisplayName) ? Model.ScreenName : Model.DisplayName!;
+    public string Subtitle => $"@{Model.ScreenName}";
+    public IAsyncRelayCommand RemoveCommand { get; }
+}
+
 /// <summary>
 /// 下载页 VM（B5）：活动任务卡片列表 + 账号内容（喜欢/书签）入口。
 /// 事件处理器先经 _dispatcher.Post 再操作集合与 Update（控制器裁定 2）。
 /// </summary>
 public partial class DownloadsViewModel : ObservableObject
 {
-    private const string SiteId = "twitter"; // 同 UsersViewModel：Phase B 仅接入 X (Twitter)
-
+    private readonly ICurrentSite _currentSite;
     private readonly IDownloadQueueService _queue;
     private readonly IAccountQueryService _accountQuery;
     private readonly IAppSettings _settings;
     private readonly IUiDispatcher _dispatcher;
+    private readonly IUserQueryService _userQuery;
+    private readonly IDbContextFactory<GalleryDbContext> _factory;
     private bool _started; // NavigationCacheMode=Enabled 时 OnNavigatedTo 每次导航触发，Start/Stop 须对称
 
+    private string SiteId => _currentSite.SiteId;
+
     public DownloadsViewModel(IDownloadQueueService queue, IAccountQueryService accountQuery,
-        IAppSettings settings, IUiDispatcher dispatcher)
+        IAppSettings settings, IUiDispatcher dispatcher, ICurrentSite currentSite,
+        IUserQueryService userQuery, IDbContextFactory<GalleryDbContext> factory)
     {
         _queue = queue;
         _accountQuery = accountQuery;
         _settings = settings;
         _dispatcher = dispatcher;
+        _currentSite = currentSite;
+        _userQuery = userQuery;
+        _factory = factory;
+        _currentSite.Changed += () => _dispatcher.Post(NotifySite);
 
         DownloadLikesCommand = new AsyncRelayCommand(() => DownloadAccountContentAsync(ContentKind.AccountLikes));
         DownloadBookmarksCommand = new AsyncRelayCommand(() => DownloadAccountContentAsync(ContentKind.AccountBookmarks));
+        StartDownloadListCommand = new AsyncRelayCommand(StartDownloadListAsync);
     }
 
     public ObservableCollection<JobCardViewModel> Jobs { get; } = [];
+    public ObservableCollection<DownloadListItemViewModel> DownloadList { get; } = [];
 
     private bool _hasActive;
     public bool HasActive { get => _hasActive; private set => SetProperty(ref _hasActive, value); }
@@ -129,6 +155,26 @@ public partial class DownloadsViewModel : ObservableObject
 
     public IAsyncRelayCommand DownloadLikesCommand { get; }
     public IAsyncRelayCommand DownloadBookmarksCommand { get; }
+    public IAsyncRelayCommand StartDownloadListCommand { get; }
+
+    public bool HasDownloadList => DownloadList.Count > 0;
+    public string DownloadListHeader => $"待下载清单（{DownloadList.Count}）";
+
+    public bool IsSiteAvailable => _currentSite.IsAvailable;
+    public bool SupportsAccountContent => _currentSite.IsAvailable; // V1 仅 Twitter 有喜欢/书签
+    public bool ShowComingSoon => !_currentSite.IsAvailable;
+    public string ComingSoonMessage => $"{_currentSite.Current.DisplayName} 即将支持，目前仅 X (Twitter) 可下载。";
+
+    private void NotifySite()
+    {
+        OnPropertyChanged(nameof(IsSiteAvailable));
+        OnPropertyChanged(nameof(SupportsAccountContent));
+        OnPropertyChanged(nameof(ShowComingSoon));
+        OnPropertyChanged(nameof(ComingSoonMessage));
+        RebuildVisibleJobs();
+        _ = RefreshHasAccountAsync();
+        _ = LoadDownloadListAsync();
+    }
 
     /// <summary>
     /// 订阅 queue.JobChanged/JobRemoved + 播种 Active 现值 + 剪除 Stop 窗口内错失终态的幽灵卡片
@@ -144,21 +190,9 @@ public partial class DownloadsViewModel : ObservableObject
         // 审查 Important-1：NavigationCacheMode=Enabled + singleton 下，离页 Stop 后任务在后台跑到终态
         // 时 JobChanged/JobRemoved 均丢失，残留卡片会永久停在"下载中"且 HasActive 卡 true（取消对已结束
         // 任务也是空操作）——播种时按 Active 的 JobId 集合剪除已不存在者（同批经 dispatcher）并重算 HasActive
-        var active = _queue.Active;
-        var activeIds = active.Select(s => s.JobId).ToHashSet();
-        _dispatcher.Post(() =>
-        {
-            for (var i = Jobs.Count - 1; i >= 0; i--)
-            {
-                if (!activeIds.Contains(Jobs[i].JobId))
-                    Jobs.RemoveAt(i);
-            }
-            foreach (var snapshot in active)
-                AddOrUpdateCard(snapshot);
-            UpdateHasActive();
-            JobsChanged?.Invoke();
-        });
+        _dispatcher.Post(RebuildVisibleJobs);
         _ = RefreshHasAccountAsync(); // fire-and-forget：内部自捕获异常（B4 模式，不崩线程）
+        _ = LoadDownloadListAsync();
     }
 
     /// <summary>退订队列事件（页面 OnNavigatedFrom 调用，与 Start 对称）。</summary>
@@ -183,18 +217,45 @@ public partial class DownloadsViewModel : ObservableObject
             JobsChanged?.Invoke();
         });
 
-    private void AddOrUpdateCard(JobSnapshot snapshot)
+    private void RebuildVisibleJobs()
     {
-        if (Jobs.FirstOrDefault(c => c.JobId == snapshot.JobId) is { } card)
+        var mine = _queue.Active.Where(s =>
+            string.Equals(s.SiteId, SiteId, StringComparison.OrdinalIgnoreCase)).ToList();
+        var ids = mine.Select(s => s.JobId).ToHashSet();
+        for (var i = Jobs.Count - 1; i >= 0; i--)
         {
-            card.Update(snapshot);
+            if (!ids.Contains(Jobs[i].JobId))
+                Jobs.RemoveAt(i);
         }
-        else
-        {
-            Jobs.Add(new JobCardViewModel(snapshot, CancelJobAsync));
-        }
+        foreach (var snapshot in mine)
+            UpsertCard(snapshot);
         UpdateHasActive();
         JobsChanged?.Invoke();
+    }
+
+    private void AddOrUpdateCard(JobSnapshot snapshot)
+    {
+        if (!string.Equals(snapshot.SiteId, SiteId, StringComparison.OrdinalIgnoreCase))
+        {
+            if (Jobs.FirstOrDefault(c => c.JobId == snapshot.JobId) is { } stray)
+            {
+                Jobs.Remove(stray);
+                UpdateHasActive();
+                JobsChanged?.Invoke();
+            }
+            return;
+        }
+        UpsertCard(snapshot);
+        UpdateHasActive();
+        JobsChanged?.Invoke();
+    }
+
+    private void UpsertCard(JobSnapshot snapshot)
+    {
+        if (Jobs.FirstOrDefault(c => c.JobId == snapshot.JobId) is { } card)
+            card.Update(snapshot);
+        else
+            Jobs.Add(new JobCardViewModel(snapshot, CancelJobAsync));
     }
 
     private void UpdateHasActive() => HasActive = Jobs.Count > 0;
@@ -215,6 +276,11 @@ public partial class DownloadsViewModel : ObservableObject
     // 控制器裁定 6：解析账号 → IAppSettings 目录与 siteOptions → EnqueueAccountContentAsync
     private async Task DownloadAccountContentAsync(ContentKind kind)
     {
+        if (!_currentSite.IsAvailable)
+        {
+            StatusMessage = ComingSoonMessage;
+            return;
+        }
         Account? account;
         try
         {
@@ -263,5 +329,88 @@ public partial class DownloadsViewModel : ObservableObject
             if (error is not null && StatusMessage is null)
                 StatusMessage = $"账号状态获取失败：{error.Message}";
         });
+    }
+
+    private async Task LoadDownloadListAsync()
+    {
+        IReadOnlyList<User> list;
+        try
+        {
+            list = await _userQuery.ListDownloadListAsync(SiteId);
+        }
+        catch (Exception ex)
+        {
+            _dispatcher.Post(() => StatusMessage = $"加载下载清单失败：{ex.Message}");
+            return;
+        }
+        _dispatcher.Post(() =>
+        {
+            DownloadList.Clear();
+            foreach (var user in list)
+                DownloadList.Add(new DownloadListItemViewModel(user, RemoveFromListAsync));
+            NotifyDownloadList();
+        });
+    }
+
+    private void NotifyDownloadList()
+    {
+        OnPropertyChanged(nameof(HasDownloadList));
+        OnPropertyChanged(nameof(DownloadListHeader));
+    }
+
+    private async Task RemoveFromListAsync(DownloadListItemViewModel item)
+    {
+        try
+        {
+            await using var db = await _factory.CreateDbContextAsync();
+            await db.Users.Where(u => u.Id == item.Model.Id)
+                .ExecuteUpdateAsync(s => s.SetProperty(u => u.InDownloadList, false));
+            await LoadDownloadListAsync();
+        }
+        catch (Exception ex)
+        {
+            StatusMessage = $"移出清单失败：{ex.Message}";
+        }
+    }
+
+    private async Task StartDownloadListAsync()
+    {
+        if (!_currentSite.IsAvailable)
+        {
+            StatusMessage = ComingSoonMessage;
+            return;
+        }
+        if (DownloadList.Count == 0)
+        {
+            StatusMessage = "下载清单为空";
+            return;
+        }
+        Account? account;
+        try
+        {
+            account = await _accountQuery.GetActiveAsync(SiteId);
+        }
+        catch (Exception ex)
+        {
+            StatusMessage = $"账号状态获取失败：{ex.Message}";
+            return;
+        }
+        if (account is null)
+        {
+            StatusMessage = "请先在设置中导入 Cookie";
+            return;
+        }
+        try
+        {
+            var users = DownloadList.Select(i => i.Model).ToList();
+            var dir = await _settings.GetDownloadDirectoryAsync();
+            var siteOptions = await _settings.GetSiteOptionsAsync(SiteId);
+            await _queue.EnqueueUserMediaAsync(account, users, dir, siteOptions);
+            StatusMessage = $"已加入下载队列（{users.Count} 个用户）";
+        }
+        catch (Exception ex)
+        {
+            StatusMessage = ex.Message;
+        }
     }
 }

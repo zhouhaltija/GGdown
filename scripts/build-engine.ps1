@@ -22,19 +22,26 @@ Write-Host "==> 组装引擎到 $EngineDir"
 if (Test-Path $EngineDir) { Remove-Item $EngineDir -Recurse -Force }
 New-Item $EngineDir -ItemType Directory -Force | Out-Null
 
-# 1. Python embeddable
-$zipPath = Join-Path $DistDir "python-embed.zip"
+# 1. Python embeddable（zip 缓存在仓库 .cache，不随 dist 清空；版本变了会换文件名重下）
+$RepoRoot = [System.IO.Path]::GetFullPath((Join-Path $PSScriptRoot ".."))
+$CacheDir = Join-Path $RepoRoot ".cache"
+New-Item $CacheDir -ItemType Directory -Force | Out-Null
+$zipName = "python-$PythonVersion-embed-amd64.zip"
+$zipPath = Join-Path $CacheDir $zipName
 $url = "https://www.python.org/ftp/python/$PythonVersion/python-$PythonVersion-embed-amd64.zip"
-Write-Host "==> 下载 $url"
-Invoke-WebRequest -Uri $url -OutFile $zipPath
+if (Test-Path $zipPath) {
+    Write-Host "==> 复用缓存 $zipPath"
+} else {
+    Write-Host "==> 下载 $url"
+    Invoke-WebRequest -Uri $url -OutFile $zipPath
+}
 Expand-Archive -Path $zipPath -DestinationPath $PythonDir -Force
-Remove-Item $zipPath -Force
 
 # 2. gallery-dl 到 --target（与系统包隔离）
 Write-Host "==> pip 安装 gallery-dl==$GalleryDlVersion"
 New-Item $SitePackagesDir -ItemType Directory -Force | Out-Null
-pip install --disable-pip-version-check --target $SitePackagesDir "gallery-dl==$GalleryDlVersion"
-if ($LASTEXITCODE -ne 0) { throw "pip install gallery-dl 失败" }
+pip install --disable-pip-version-check --target $SitePackagesDir "gallery-dl==$GalleryDlVersion" "PySocks"
+if ($LASTEXITCODE -ne 0) { throw "pip install gallery-dl/PySocks 失败" }
 
 # 3. 补丁 ._pth：追加 ..\site-packages 并启用 import site（使嵌入解释器可见 site-packages）
 $pyTag = "python$($PythonVersion -replace '^(\d+)\.(\d+).*', '$1$2')"

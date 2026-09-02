@@ -71,17 +71,20 @@ public sealed partial class HistoryRowViewModel : ObservableObject
 /// </summary>
 public partial class HistoryViewModel : ObservableObject
 {
-    private const string SiteId = "twitter"; // 同 Users/Downloads：Phase B 仅接入 X (Twitter)
-
+    private readonly ICurrentSite _currentSite;
     private readonly IHistoryQueryService _history;
     private readonly IUiDispatcher _dispatcher;
     private int _refreshId; // 并发刷新代数：过期刷新的集合变更丢弃
 
+    private string SiteId => _currentSite.SiteId;
+
     public HistoryViewModel(IHistoryQueryService history, IUiDispatcher dispatcher,
-        IAccountQueryService accountQuery, SiteRegistry sites)
+        IAccountQueryService accountQuery, SiteRegistry sites, ICurrentSite currentSite)
     {
         _history = history;
         _dispatcher = dispatcher;
+        _currentSite = currentSite;
+        _currentSite.Changed += () => _ = RefreshAsync();
         // accountQuery/sites 按 Produces 契约保留构造签名（当前无消费点：状态链接取 brief 定稿的
         // 字面构造，FilterUsers 走 IHistoryQueryService.ListUsersAsync(SiteId)），故不存储避免 CS0414。
 

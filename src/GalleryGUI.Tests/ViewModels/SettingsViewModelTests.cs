@@ -45,7 +45,7 @@ public class SettingsViewModelTests : IDisposable
         _queue = new DownloadQueueService(factory, _engine, new FakeStats(), _paths, _sites, NullLogger<DownloadQueueService>.Instance);
         var accountSvc = new AccountService(_db, _engine, _paths, _sites, NullLogger<AccountService>.Instance);
         _vm = new SettingsViewModel(_settings, accountSvc, new AccountQueryService(factory),
-            _engine, _queue, _paths, _sites, new SyncDispatcher());
+            _engine, _queue, _paths, _sites, new SyncDispatcher(), new FakeCurrentSite());
     }
     public void Dispose()
     {
@@ -108,6 +108,32 @@ public class SettingsViewModelTests : IDisposable
     }
 
     // ---- ③ 下载目录：Set 后读取一致 ----
+
+    [Fact]
+    public async Task SaveGeneral_persists_proxy_and_Start_reloads_it()
+    {
+        await _vm.StartAsync();
+        _vm.ProxyScheme = "socks5h";
+        _vm.ProxyHost = "127.0.0.1";
+        _vm.ProxyPort = 1080;
+        _vm.ProxyUsername = "u";
+        _vm.ProxyPassword = "p@ss";
+        await _vm.SaveGeneralCommand.ExecuteAsync(null);
+
+        var saved = await _settings.GetProxyAsync();
+        Assert.Equal("socks5h://u:p%40ss@127.0.0.1:1080", saved.ToUrl());
+
+        var vm2 = new SettingsViewModel(_settings,
+            new AccountService(_db, _engine, _paths, _sites, NullLogger<AccountService>.Instance),
+            new AccountQueryService(new SingleDbContextFactory(_db)),
+            _engine, _queue, _paths, _sites, new SyncDispatcher(), new FakeCurrentSite());
+        await vm2.StartAsync();
+        Assert.Equal("socks5h", vm2.ProxyScheme);
+        Assert.Equal("127.0.0.1", vm2.ProxyHost);
+        Assert.Equal(1080, vm2.ProxyPort);
+        Assert.Equal("u", vm2.ProxyUsername);
+        Assert.Equal("p@ss", vm2.ProxyPassword);
+    }
 
     [Fact]
     public async Task SetDownloadDirectory_persists_and_updates_display()
@@ -254,7 +280,7 @@ public class SettingsViewModelTests : IDisposable
             new AccountService(_db, _engine, _paths, _sites, NullLogger<AccountService>.Instance),
             new AccountQueryService(factory),
             new HelloErrorEngine(new EngineException("python 未找到")),
-            _queue, _paths, _sites, new SyncDispatcher());
+            _queue, _paths, _sites, new SyncDispatcher(), new FakeCurrentSite());
         await vm.StartAsync();
         Assert.StartsWith("引擎未就绪", vm.EngineVersion);
         Assert.Contains("python 未找到", vm.EngineVersion);

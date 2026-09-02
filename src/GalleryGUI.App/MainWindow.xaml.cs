@@ -1,6 +1,8 @@
+using System.IO;
 using GalleryGUI.App.Views;
 using GalleryGUI.Data;
 using GalleryGUI.Services;
+using GalleryGUI.ViewModels;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.UI.Dispatching;
 using Microsoft.UI.Xaml;
@@ -14,6 +16,7 @@ public sealed partial class MainWindow : Window
     private readonly IServiceProvider _services;
     private readonly DispatcherQueue _dispatcherQueue; // B8：队列事件自后台线程触发，UI 操作一律 TryEnqueue 到本窗口 UI 线程
     private DispatcherQueueTimer? _autoCloseTimer;     // B8：完成通知自动关闭计时器（仅 UI 线程访问）
+    public SiteSwitcherViewModel SiteSwitcher { get; }
 
     /// <summary>Picker 属主句柄（B4 控制器裁定：FileDialogService.SetOwner 消费，App.OnLaunched 注入）。</summary>
     public IntPtr WindowHandle => WinRT.Interop.WindowNative.GetWindowHandle(this);
@@ -24,10 +27,14 @@ public sealed partial class MainWindow : Window
     public MainWindow(IServiceProvider services)
     {
         _services = services;
+        SiteSwitcher = services.GetRequiredService<SiteSwitcherViewModel>();
         // 构造发生在 App.OnLaunched（UI 线程），GetForCurrentThread 取到的即本窗口 UI 线程的队列
         _dispatcherQueue = DispatcherQueue.GetForCurrentThread();
         InitializeComponent();
         SystemBackdrop = new MicaBackdrop();
+        var iconPath = Path.Combine(AppContext.BaseDirectory, "Assets", "app.ico");
+        if (File.Exists(iconPath))
+            AppWindow.SetIcon(iconPath);
         ContentFrame.Navigate(typeof(UsersPage), services);
         Nav.SelectedItem = Nav.MenuItems[0];
 
@@ -36,6 +43,12 @@ public sealed partial class MainWindow : Window
         var queue = services.GetRequiredService<IDownloadQueueService>();
         queue.AccountInvalid += OnAccountInvalid;
         queue.JobChanged += OnJobChanged;
+    }
+
+    private void SiteList_SelectionChanged(object sender, SelectionChangedEventArgs e)
+    {
+        if (SiteFlyout.IsOpen)
+            SiteFlyout.Hide();
     }
 
     // ---- B8 全局通知 ----

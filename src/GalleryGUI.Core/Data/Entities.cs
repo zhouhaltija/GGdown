@@ -31,6 +31,8 @@ public sealed class User
     public UserSource Source { get; set; }
     public long? OwnerAccountId { get; set; }
     public bool IsPinned { get; set; }
+    public bool IsSkipped { get; set; }
+    public bool InDownloadList { get; set; }
     public long DownloadCount { get; set; }
     public DateTime? LastDownloadAt { get; set; }
     public DateTime AddedAt { get; set; }

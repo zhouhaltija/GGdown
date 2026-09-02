@@ -55,7 +55,7 @@ public class HistoryViewModelTests : IDisposable
         _db.SaveChanges();
         var sites = new SiteRegistry([new TwitterSiteProvider()]);
         _vm = new HistoryViewModel(new HistoryQueryService(factory), new SyncDispatcher(),
-            new AccountQueryService(factory), sites);
+            new AccountQueryService(factory), sites, new FakeCurrentSite());
     }
 
     public void Dispose()

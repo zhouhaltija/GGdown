@@ -14,6 +14,10 @@ public interface IAppSettings
     Task SetConcurrencyAsync(int concurrency, CancellationToken ct = default);
     Task<IReadOnlyDictionary<string, object?>> GetSiteOptionsAsync(string siteId, CancellationToken ct = default);
     Task SetSiteOptionsAsync(string siteId, IReadOnlyDictionary<string, object?> options, CancellationToken ct = default);
+    Task<ProxyConfig> GetProxyAsync(CancellationToken ct = default);
+    Task SetProxyAsync(ProxyConfig proxy, CancellationToken ct = default);
+    Task<string> GetCurrentSiteIdAsync(CancellationToken ct = default);
+    Task SetCurrentSiteIdAsync(string siteId, CancellationToken ct = default);
 }
 
 // 控制器裁定（captive dependency 修复）：不注入 Scoped 的 ISettingsStore（内部持有 scoped DbContext，
@@ -65,6 +69,32 @@ public sealed class AppSettings(IDbContextFactory<GalleryDbContext> factory, Sit
     {
         await using var db = await factory.CreateDbContextAsync(ct);
         await new GallerySettingsStore(db).SetAsync($"site.{siteId}.options", options, ct);
+    }
+
+    public async Task<ProxyConfig> GetProxyAsync(CancellationToken ct = default)
+    {
+        await using var db = await factory.CreateDbContextAsync(ct);
+        var stored = await new GallerySettingsStore(db).GetAsync<ProxyConfig>("network.proxy", null, ct);
+        return stored ?? new ProxyConfig();
+    }
+
+    public async Task SetProxyAsync(ProxyConfig proxy, CancellationToken ct = default)
+    {
+        await using var db = await factory.CreateDbContextAsync(ct);
+        await new GallerySettingsStore(db).SetAsync("network.proxy", proxy, ct);
+    }
+
+    public async Task<string> GetCurrentSiteIdAsync(CancellationToken ct = default)
+    {
+        await using var db = await factory.CreateDbContextAsync(ct);
+        var v = await new GallerySettingsStore(db).GetAsync<string>("ui.currentSite", null, ct);
+        return string.IsNullOrWhiteSpace(v) ? SiteCatalog.TwitterId : v;
+    }
+
+    public async Task SetCurrentSiteIdAsync(string siteId, CancellationToken ct = default)
+    {
+        await using var db = await factory.CreateDbContextAsync(ct);
+        await new GallerySettingsStore(db).SetAsync("ui.currentSite", SiteCatalog.Get(siteId).SiteId, ct);
     }
 
     // 偏离（最小修正，已记录）：System.Text.Json 把 object? 值反序列化为 JsonElement，

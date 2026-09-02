@@ -36,7 +36,7 @@ public class ImportViewModelTests : IDisposable
         var sites = new SiteRegistry([new TwitterSiteProvider()]);
         var accountSvc = new AccountService(_db, _engine, _paths, sites, NullLogger<AccountService>.Instance);
         var userSvc = new UserService(_db, _engine, _paths, sites, NullLogger<UserService>.Instance);
-        _vm = new ImportViewModel(accountSvc, userSvc, new AccountQueryService(factory), new SyncDispatcher(), sites);
+        _vm = new ImportViewModel(accountSvc, userSvc, new AccountQueryService(factory), new SyncDispatcher(), sites, new FakeCurrentSite());
     }
     public void Dispose()
     {

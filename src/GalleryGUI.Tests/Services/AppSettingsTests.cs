@@ -52,4 +52,25 @@ public class AppSettingsTests : IDisposable
         await _settings.SetSiteOptionsAsync("twitter", new Dictionary<string, object?> { ["videos"] = false });
         Assert.False((bool)(await _settings.GetSiteOptionsAsync("twitter"))["videos"]!);
     }
+
+    [Fact]
+    public async Task Proxy_missing_is_disabled_and_roundtrips()
+    {
+        var missing = await _settings.GetProxyAsync();
+        Assert.False(missing.IsEnabled);
+        Assert.Null(missing.ToUrl());
+
+        var cfg = new ProxyConfig("socks5h", "127.0.0.1", 1080, "u", "p@ss");
+        await _settings.SetProxyAsync(cfg);
+        var loaded = await _settings.GetProxyAsync();
+        Assert.Equal("socks5h", loaded.Scheme);
+        Assert.Equal("127.0.0.1", loaded.Host);
+        Assert.Equal(1080, loaded.Port);
+        Assert.Equal("u", loaded.Username);
+        Assert.Equal("p@ss", loaded.Password);
+        Assert.Equal("socks5h://u:p%40ss@127.0.0.1:1080", loaded.ToUrl());
+
+        await _settings.SetProxyAsync(new ProxyConfig("http", "", 0));
+        Assert.False((await _settings.GetProxyAsync()).IsEnabled);
+    }
 }

@@ -1,11 +1,29 @@
 """runner 共享基座：事件发射、配置展开、输入解析、日志桥接。"""
 import json
 import logging
+import os
 import re
 import sys
 
 PROTOCOL = 1
 RUNNER_VERSION = "1.0.0"
+
+
+def configure_stdio():
+    """Windows 默认 GBK，gallery-dl 用户名里的 ⋆ 等字符会 UnicodeEncodeError。"""
+    os.environ.setdefault("PYTHONUTF8", "1")
+    os.environ.setdefault("PYTHONIOENCODING", "utf-8")
+    for stream in (sys.stdout, sys.stderr):
+        reconf = getattr(stream, "reconfigure", None)
+        if reconf is None:
+            continue
+        try:
+            reconf(encoding="utf-8", errors="replace")
+        except Exception:
+            pass
+
+
+configure_stdio()
 
 
 class AuthError(Exception):
@@ -61,6 +79,23 @@ def apply_options(options):
     for path, value in walk_config(options or {}):
         # gallery-dl 1.32.x 的 config.set 签名为 set(path, key, value)
         config.set(path[:-1], path[-1], value)
+
+
+def apply_proxy_from_env():
+    """把进程环境里的代理写入 gallery-dl，覆盖 extractor / downloader。
+
+    C# 在启动 python 时设置 HTTP_PROXY/HTTPS_PROXY/ALL_PROXY；whoami 的裸
+    requests.get 走 requests 默认 trust_env，gallery-dl 再显式 set 以免
+    个别路径忽略环境变量。
+    """
+    import os
+    url = os.environ.get("ALL_PROXY") or os.environ.get("HTTPS_PROXY") or os.environ.get("HTTP_PROXY")
+    if not url:
+        return
+    from gallery_dl import config
+    config.set(("extractor",), "proxy", url)
+    config.set(("downloader",), "proxy", url)
+    config.set(("downloader", "http"), "proxy", url)
 
 
 def parse_screen_name(value):

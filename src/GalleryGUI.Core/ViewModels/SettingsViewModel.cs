@@ -60,8 +60,7 @@ public sealed partial class OptionItemViewModel : ObservableObject
 /// </summary>
 public partial class SettingsViewModel : ObservableObject
 {
-    private const string SiteId = "twitter"; // 同 Users/Downloads/History：Phase B 仅接入 X (Twitter)，V1 取唯一注册站点
-
+    private readonly ICurrentSite _currentSite;
     private readonly IAppSettings _settings;
     private readonly IAccountService _accounts;
     private readonly IAccountQueryService _accountQuery;
@@ -72,8 +71,11 @@ public partial class SettingsViewModel : ObservableObject
     private readonly IUiDispatcher _dispatcher;
 
     public SettingsViewModel(IAppSettings settings, IAccountService accounts, IAccountQueryService accountQuery,
-        IDownloadEngine engine, IDownloadQueueService queue, IAppPaths paths, SiteRegistry sites, IUiDispatcher dispatcher)
+        IDownloadEngine engine, IDownloadQueueService queue, IAppPaths paths, SiteRegistry sites, IUiDispatcher dispatcher,
+        ICurrentSite currentSite)
     {
+        _currentSite = currentSite;
+        _currentSite.Changed += () => _ = StartAsync();
         _settings = settings;
         _accounts = accounts;
         _accountQuery = accountQuery;
@@ -105,12 +107,40 @@ public partial class SettingsViewModel : ObservableObject
     [ObservableProperty]
     private string? _statusMessage;       // 操作结果反馈（成功/失败一行话）
 
+    public IReadOnlyList<string> ProxySchemeChoices { get; } = ["http", "socks5", "socks5h"];
+
+    [ObservableProperty]
+    private string _proxyScheme = "http";
+
+    [ObservableProperty]
+    private string _proxyHost = "";
+
+    [ObservableProperty]
+    private double _proxyPort;
+
+    [ObservableProperty]
+    private string _proxyUsername = "";
+
+    [ObservableProperty]
+    private string _proxyPassword = "";
+
     // —— 账号 ——
 
     private Account? _activeAccount;
     public Account? ActiveAccount { get => _activeAccount; private set => SetProperty(ref _activeAccount, value); } // null → 页面显示导入按钮
 
+    private string SiteId => _currentSite.SiteId;
+
+    public bool IsSiteAvailable => _currentSite.IsAvailable;
+    public bool ShowComingSoon => !_currentSite.IsAvailable;
+    public string SiteDisplayName => _currentSite.Current.DisplayName;
+    public string AccountSiteHeader => $"{_currentSite.Current.DisplayName} 账号";
+    public string OptionsHeader => $"站点选项 · {_currentSite.Current.DisplayName}";
+    public string ComingSoonMessage => $"{_currentSite.Current.DisplayName} 即将支持，目前仅 X (Twitter) 可导入账号与站点选项。";
+
     public bool HasAccount => ActiveAccount is not null;
+    public bool ShowAccountImport => IsSiteAvailable && !HasAccount;
+    public bool ShowAccountCard => IsSiteAvailable && HasAccount;
     public string AccountTitle => ActiveAccount is null ? ""
         : string.IsNullOrWhiteSpace(ActiveAccount.DisplayName) ? ActiveAccount.ScreenName ?? ""
         : ActiveAccount.DisplayName!;
@@ -158,16 +188,36 @@ public partial class SettingsViewModel : ObservableObject
             var concurrency = await _settings.GetConcurrencyAsync();
             _queue.Concurrency = concurrency; // 裁定 4：启动时应用并发（Phase A setter）
             var directory = await _settings.GetDownloadDirectoryAsync();
-            var account = await _accountQuery.GetActiveAsync(SiteId);
-            var options = await _settings.GetSiteOptionsAsync(SiteId);
+            var proxy = await _settings.GetProxyAsync();
+            var proxyUrl = proxy.ToUrl();
+            var proxyScheme = proxyUrl is null ? "http"
+                : proxyUrl.StartsWith("socks5h://", StringComparison.OrdinalIgnoreCase) ? "socks5h"
+                : proxyUrl.StartsWith("socks5://", StringComparison.OrdinalIgnoreCase) ? "socks5"
+                : "http";
+            var account = _currentSite.IsAvailable ? await _accountQuery.GetActiveAsync(SiteId) : null;
+            var options = _currentSite.IsAvailable && _sites.IsRegistered(SiteId)
+                ? await _settings.GetSiteOptionsAsync(SiteId)
+                : null;
             var engineVersion = await ProbeEngineAsync();
             _dispatcher.Post(() =>
             {
                 Concurrency = concurrency;
                 DownloadDirectory = directory;
+                ProxyScheme = proxyScheme;
+                ProxyHost = proxy.Host;
+                ProxyPort = proxy.Port;
+                ProxyUsername = proxy.Username ?? "";
+                ProxyPassword = proxy.Password ?? "";
                 SetActiveAccount(account);
                 EngineVersion = engineVersion;
-                RebuildOptions(options);
+                if (options is null) TwitterOptions.Clear();
+                else RebuildOptions(options);
+                OnPropertyChanged(nameof(IsSiteAvailable));
+                OnPropertyChanged(nameof(ShowComingSoon));
+                OnPropertyChanged(nameof(SiteDisplayName));
+                OnPropertyChanged(nameof(AccountSiteHeader));
+                OnPropertyChanged(nameof(OptionsHeader));
+                OnPropertyChanged(nameof(ComingSoonMessage));
             });
         }
         catch (Exception ex) // 坏库等异常不崩线程（B5 模式）
@@ -206,6 +256,8 @@ public partial class SettingsViewModel : ObservableObject
     {
         ActiveAccount = account;
         OnPropertyChanged(nameof(HasAccount));
+        OnPropertyChanged(nameof(ShowAccountImport));
+        OnPropertyChanged(nameof(ShowAccountCard));
         OnPropertyChanged(nameof(AccountTitle));
         OnPropertyChanged(nameof(AccountHandle));
         OnPropertyChanged(nameof(AccountStatusText));
@@ -236,6 +288,12 @@ public partial class SettingsViewModel : ObservableObject
             _queue.Concurrency = n; // 保存通用设置同步 setter（裁定 4）
             if (!string.IsNullOrWhiteSpace(DownloadDirectory))
                 await _settings.SetDownloadDirectoryAsync(DownloadDirectory);
+            await _settings.SetProxyAsync(new ProxyConfig(
+                ProxyScheme,
+                ProxyHost.Trim(),
+                (int)Math.Round(ProxyPort),
+                string.IsNullOrWhiteSpace(ProxyUsername) ? null : ProxyUsername.Trim(),
+                string.IsNullOrWhiteSpace(ProxyPassword) ? null : ProxyPassword));
             StatusMessage = "通用设置已保存";
         }
         catch (Exception ex)
@@ -247,6 +305,11 @@ public partial class SettingsViewModel : ObservableObject
     // 裁定 3：只保存 Schema 中存在的键，值类型与 DefaultOptions 对齐（bool/string，经 OptionItemViewModel.ToValue）
     private async Task SaveOptionsAsync()
     {
+        if (!_currentSite.IsAvailable || !_sites.IsRegistered(SiteId))
+        {
+            StatusMessage = ComingSoonMessage;
+            return;
+        }
         try
         {
             var schema = _sites.Get(SiteId).OptionsSchema;

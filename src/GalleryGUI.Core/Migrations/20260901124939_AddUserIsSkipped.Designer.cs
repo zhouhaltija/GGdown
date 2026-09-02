@@ -3,6 +3,7 @@ using System;
 using GalleryGUI.Data;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
+using Microsoft.EntityFrameworkCore.Migrations;
 using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 
 #nullable disable
@@ -10,9 +11,11 @@ using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 namespace GalleryGUI.Core.Migrations
 {
     [DbContext(typeof(GalleryDbContext))]
-    partial class GalleryDbContextModelSnapshot : ModelSnapshot
+    [Migration("20260901124939_AddUserIsSkipped")]
+    partial class AddUserIsSkipped
     {
-        protected override void BuildModel(ModelBuilder modelBuilder)
+        /// <inheritdoc />
+        protected override void BuildTargetModel(ModelBuilder modelBuilder)
         {
 #pragma warning disable 612, 618
             modelBuilder.HasAnnotation("ProductVersion", "8.0.11");
@@ -185,9 +188,6 @@ namespace GalleryGUI.Core.Migrations
                         .HasColumnType("INTEGER");
 
                     b.Property<bool>("IsSkipped")
-                        .HasColumnType("INTEGER");
-
-                    b.Property<bool>("InDownloadList")
                         .HasColumnType("INTEGER");
 
                     b.Property<DateTime?>("LastDownloadAt")

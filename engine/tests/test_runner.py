@@ -3,8 +3,37 @@ import sys
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
-from sites import classify_error, parse_screen_name, walk_config
+from sites import apply_proxy_from_env, classify_error, configure_stdio, emit, parse_screen_name, walk_config
 import pytest
+
+
+def test_configure_stdio_allows_star_operator():
+    configure_stdio()
+    enc = (sys.stdout.encoding or "").lower().replace("-", "")
+    assert enc in {"utf8", "utf_8"}
+    sys.stdout.write("\u22c6")
+    sys.stdout.flush()
+    emit("account", screen_name="x", display_name="foo\u22c6bar")
+
+
+def test_apply_proxy_from_env_sets_gallery_dl_config(monkeypatch):
+    from gallery_dl import config
+    config.clear()
+    monkeypatch.setenv("ALL_PROXY", "socks5h://127.0.0.1:1080")
+    apply_proxy_from_env()
+    assert config.get(("extractor",), "proxy") == "socks5h://127.0.0.1:1080"
+    assert config.get(("downloader",), "proxy") == "socks5h://127.0.0.1:1080"
+    assert config.get(("downloader", "http"), "proxy") == "socks5h://127.0.0.1:1080"
+
+
+def test_apply_proxy_from_env_noop_without_env(monkeypatch):
+    from gallery_dl import config
+    config.clear()
+    monkeypatch.delenv("ALL_PROXY", raising=False)
+    monkeypatch.delenv("HTTPS_PROXY", raising=False)
+    monkeypatch.delenv("HTTP_PROXY", raising=False)
+    apply_proxy_from_env()
+    assert config.get(("extractor",), "proxy") is None
 
 
 def test_walk_config_flattens_nested_dicts():

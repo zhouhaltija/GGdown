@@ -81,6 +81,21 @@ public sealed class SyncDispatcher : IUiDispatcher
     public void Post(Action action) => action();
 }
 
+public sealed class FakeCurrentSite : GalleryGUI.Sites.ICurrentSite
+{
+    public GalleryGUI.Sites.SiteInfo Current { get; private set; } = GalleryGUI.Sites.SiteCatalog.Default;
+    public string SiteId => Current.SiteId;
+    public bool IsAvailable => Current.Available;
+    public event Action? Changed;
+    public Task LoadAsync(CancellationToken ct = default) => Task.CompletedTask;
+    public Task SelectAsync(string siteId, CancellationToken ct = default)
+    {
+        Current = GalleryGUI.Sites.SiteCatalog.Get(siteId);
+        Changed?.Invoke();
+        return Task.CompletedTask;
+    }
+}
+
 /// <summary>
 /// 继承 StatsAggregator、覆写 ApplyJobCompletionAsync 只记录不落库（Task 10 的 DownloadQueueService 测试依赖）。
 /// 空注入 base(null!)：覆写路径不会触碰 factory，安全（brief Step 3 括号说明）。

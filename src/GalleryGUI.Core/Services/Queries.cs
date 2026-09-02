@@ -11,6 +11,7 @@ public sealed record HistoryRow(long FileId, long? UserId, string? UserScreenNam
 public interface IUserQueryService
 {
     Task<IReadOnlyList<User>> ListAsync(string siteId, UserFilter filter, CancellationToken ct = default);
+    Task<IReadOnlyList<User>> ListDownloadListAsync(string siteId, CancellationToken ct = default);
 }
 
 public sealed class UserQueryService(IDbContextFactory<GalleryDbContext> factory) : IUserQueryService
@@ -41,6 +42,16 @@ public sealed class UserQueryService(IDbContextFactory<GalleryDbContext> factory
             };
         }
         return await ordered.ToListAsync(ct);
+    }
+
+    public async Task<IReadOnlyList<User>> ListDownloadListAsync(string siteId, CancellationToken ct = default)
+    {
+        await using var db = await factory.CreateDbContextAsync(ct);
+        return await db.Users.AsNoTracking()
+            .Where(u => u.SiteId == siteId && u.InDownloadList && !u.IsSkipped)
+            .OrderByDescending(u => u.IsPinned)
+            .ThenBy(u => u.ScreenName)
+            .ToListAsync(ct);
     }
 }
 

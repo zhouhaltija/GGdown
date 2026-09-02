@@ -8,6 +8,7 @@ using GalleryGUI.Settings;
 using GalleryGUI.Threading;
 using GalleryGUI.App.Infrastructure;
 using GalleryGUI.App.Views;
+using GalleryGUI.Sites;
 using GalleryGUI.ViewModels;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
@@ -74,7 +75,10 @@ public partial class App : Application
         // 且构造函数解析一次，实例与页面同生命周期，语义等同。
         services.AddTransient<SettingsViewModel>();
         services.AddTransient<ImportViewModel>(); // B4：每次打开对话框取新实例（UserInput/ResultMessage 不串台）
+        services.AddSingleton<SiteSwitcherViewModel>();
         Services = services.BuildServiceProvider();
+        try { Services.GetRequiredService<ICurrentSite>().LoadAsync().GetAwaiter().GetResult(); }
+        catch (Exception ex) { Log.Error(ex, "加载当前站点失败"); }
 
         ApplyDevEngineOverrides();
 
@@ -157,9 +161,16 @@ public partial class App
         var repo = FindRepoRoot(AppContext.BaseDirectory);
         if (repo is null) return;
         var opts = Services.GetRequiredService<RunnerEngineOptions>();
+        var paths = Services.GetRequiredService<IAppPaths>();
         opts.PythonExe = "python";
         opts.RunnerScript = Path.Combine(repo, "engine", "runner.py");
-        opts.GalleryDlPath = Path.Combine(repo, "gallery-dl");
+        // gallery-dl 源码 + 已播种的 site-packages（含 PySocks）。只指源码时系统 Python 没有 socks，
+        // SOCKS5 会报 InvalidSchema: Missing dependencies for SOCKS support。
+        var parts = new List<string> { Path.Combine(repo, "gallery-dl") };
+        var bundled = Path.Combine(paths.EngineDir, "site-packages");
+        if (Directory.Exists(bundled))
+            parts.Add(bundled);
+        opts.GalleryDlPath = string.Join(Path.PathSeparator, parts);
     }
 
     private static string? FindRepoRoot(string start)

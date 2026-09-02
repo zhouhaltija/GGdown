@@ -58,6 +58,23 @@ public class QueriesTests : IDisposable
     }
 
     [Fact]
+    public async Task ListDownloadList_returns_listed_non_skipped_pinned_first()
+    {
+        var alice = _db.Users.Single(u => u.ScreenName == "alice");
+        var bob = _db.Users.Single(u => u.ScreenName == "bob");
+        var carol = _db.Users.Single(u => u.ScreenName == "carol");
+        alice.InDownloadList = true;
+        bob.InDownloadList = true;
+        bob.IsSkipped = true;
+        carol.InDownloadList = true;
+        _db.SaveChanges();
+
+        var list = await _users.ListDownloadListAsync("twitter");
+        Assert.Equal(["alice", "carol"], list.Select(u => u.ScreenName));
+        Assert.Empty(await _users.ListDownloadListAsync("pixiv"));
+    }
+
+    [Fact]
     public async Task GetActive_returns_active_account_only()
     {
         var acc = await _accounts.GetActiveAsync("twitter");
