@@ -20,6 +20,7 @@ public class UsersViewModelTests : IDisposable
     private readonly GalleryDbContext _db;
     private readonly UsersViewModel _vm;
     private readonly Account _account;
+    private readonly AppSettings _settings;
 
     public UsersViewModelTests()
     {
@@ -35,12 +36,13 @@ public class UsersViewModelTests : IDisposable
         var sites = new SiteRegistry([new TwitterSiteProvider()]);
         // 适配（B2 控制器裁定后 brief 原行过时）：AppSettings 注入 IDbContextFactory 而非 ISettingsStore，
         // 原文 new AppSettings(new GallerySettingsStore(_db), sites) 已无法编译
-        var settings = new AppSettings(factory, sites);
+        _settings = new AppSettings(factory, sites);
         var queue = new DownloadQueueService(factory, _engine, new FakeStats(), _paths, sites, NullLogger<DownloadQueueService>.Instance);
         var accountSvc = new AccountService(_db, _engine, _paths, sites, NullLogger<AccountService>.Instance);
         var userSvc = new UserService(_db, _engine, _paths, sites, NullLogger<UserService>.Instance);
         _vm = new UsersViewModel(new UserQueryService(factory), new AccountQueryService(factory),
-            userSvc, queue, settings, new SyncDispatcher(), sites, new FakeCurrentSite());
+            userSvc, queue, _settings, new SyncDispatcher(), sites, new FakeCurrentSite(),
+            new HistoryQueryService(factory));
         _vm.Users.CollectionChanged += (_, _) => { };
     }
     public void Dispose()
@@ -118,7 +120,8 @@ public class UsersViewModelTests : IDisposable
         var queue = new DownloadQueueService(factory, _engine, new FakeStats(), _paths, sites, NullLogger<DownloadQueueService>.Instance);
         var vm = new UsersViewModel(new ThrowingUserQuery(), new AccountQueryService(factory),
             new UserService(_db, _engine, _paths, sites, NullLogger<UserService>.Instance),
-            queue, settings, new SyncDispatcher(), sites, new FakeCurrentSite());
+            queue, settings, new SyncDispatcher(), sites, new FakeCurrentSite(),
+            new HistoryQueryService(factory));
         vm.Users.CollectionChanged += (_, _) => { };
 
         var ex = await Record.ExceptionAsync(() => vm.RefreshCommand.ExecuteAsync(null));
@@ -153,7 +156,8 @@ public class UsersViewModelTests : IDisposable
         var queue = new DownloadQueueService(factory, _engine, new FakeStats(), _paths, sites, NullLogger<DownloadQueueService>.Instance);
         var vm = new UsersViewModel(new UserQueryService(factory), new AccountQueryService(factory),
             new UserService(_db, _engine, _paths, sites, NullLogger<UserService>.Instance),
-            queue, settings, new SyncDispatcher(), sites, site);
+            queue, settings, new SyncDispatcher(), sites, site,
+            new HistoryQueryService(factory));
         vm.Users.CollectionChanged += (_, _) => { };
         await vm.RefreshCommand.ExecuteAsync(null);
         Assert.True(vm.ShowComingSoon);
@@ -171,11 +175,11 @@ public class UsersViewModelTests : IDisposable
         var alice = _vm.Users.Single(r => r.Model.ScreenName == "alice");
         Assert.True(alice.IsSkipped);
         Assert.False(alice.CanDownload);
-        Assert.Contains("已跳过", alice.Subtitle);
+        Assert.Contains("已暂停", alice.Subtitle);
 
         _vm.SelectAll(true);
         await _vm.DownloadSelectedCommand.ExecuteAsync(null);
-        Assert.Contains("跳过 1 个", _vm.StatusMessage);
+        Assert.Contains("暂停 1 个", _vm.StatusMessage);
         Assert.Single(_db.Jobs);
         Assert.Equal(_db.Users.Single(u => u.ScreenName == "bob").Id, _db.Jobs.Single().UserId);
     }
@@ -187,7 +191,7 @@ public class UsersViewModelTests : IDisposable
         _db.SaveChanges();
         await _vm.RefreshCommand.ExecuteAsync(null);
         await _vm.Users.Single(r => r.Model.ScreenName == "alice").DownloadCommand.ExecuteAsync(null);
-        Assert.Contains("已跳过下载", _vm.StatusMessage);
+        Assert.Contains("已暂停下载", _vm.StatusMessage);
         Assert.Empty(_db.Jobs);
     }
 
@@ -199,56 +203,55 @@ public class UsersViewModelTests : IDisposable
         _vm.Users[0].IsSelected = true;
         await _vm.SkipSelectedCommand.ExecuteAsync(null);
         Assert.True(_db.Users.AsNoTracking().Single(u => u.Id == id).IsSkipped);
-        Assert.Contains("已跳过", _vm.StatusMessage);
+        Assert.Contains("已暂停", _vm.StatusMessage);
+        Assert.Equal("恢复", _vm.Users.Single(r => r.Model.Id == id).SkipButtonText);
 
         _vm.Users.Single(r => r.Model.Id == id).IsSelected = true;
         await _vm.UnskipSelectedCommand.ExecuteAsync(null);
         Assert.False(_db.Users.AsNoTracking().Single(u => u.Id == id).IsSkipped);
+        Assert.Contains("已恢复", _vm.StatusMessage);
+        Assert.Equal("暂停", _vm.Users.Single(r => r.Model.Id == id).SkipButtonText);
     }
 
     [Fact]
-    public async Task AddSelectedToList_and_remove_selected_toggle_flag()
+    public async Task ShowFollowingList_enabled_only_with_account()
     {
         await _vm.RefreshCommand.ExecuteAsync(null);
-        var id = _vm.Users[0].Model.Id;
-        Assert.Equal("加入清单", _vm.Users[0].ListButtonText);
-        _vm.Users[0].IsSelected = true;
-        await _vm.AddSelectedToListCommand.ExecuteAsync(null);
-        Assert.True(_db.Users.AsNoTracking().Single(u => u.Id == id).InDownloadList);
-        Assert.Contains("已加入下载清单", _vm.StatusMessage);
-        Assert.Equal("移出清单", _vm.Users.Single(r => r.Model.Id == id).ListButtonText);
+        Assert.True(_vm.CanShowFollowingList);
+        Assert.True(_vm.ShowFollowingListCommand.CanExecute(null));
 
-        _vm.Users.Single(r => r.Model.Id == id).IsSelected = true;
-        await _vm.RemoveSelectedFromListCommand.ExecuteAsync(null);
-        Assert.False(_db.Users.AsNoTracking().Single(u => u.Id == id).InDownloadList);
-        Assert.Contains("已移出下载清单", _vm.StatusMessage);
-        Assert.Equal("加入清单", _vm.Users.Single(r => r.Model.Id == id).ListButtonText);
+        await _db.Accounts.ExecuteDeleteAsync();
+        await _vm.RefreshCommand.ExecuteAsync(null);
+        Assert.False(_vm.CanShowFollowingList);
+        Assert.False(_vm.ShowFollowingListCommand.CanExecute(null));
     }
 
     [Fact]
-    public async Task AddSelectedToList_omits_skipped_users()
+    public async Task OpenFolder_without_downloaded_files_sets_status()
     {
-        _db.Users.Single(u => u.ScreenName == "alice").IsSkipped = true;
-        _db.SaveChanges();
+        await _settings.SetDownloadDirectoryAsync(Path.Combine(_paths.Root, "dl"));
         await _vm.RefreshCommand.ExecuteAsync(null);
-        _vm.SelectAll(true);
-        await _vm.AddSelectedToListCommand.ExecuteAsync(null);
-        Assert.False(_db.Users.AsNoTracking().Single(u => u.ScreenName == "alice").InDownloadList);
-        Assert.True(_db.Users.AsNoTracking().Single(u => u.ScreenName == "bob").InDownloadList);
+        await _vm.Users[0].OpenFolderCommand.ExecuteAsync(null);
+        Assert.Contains("还没有", _vm.StatusMessage);
     }
 
     [Fact]
-    public async Task SkipSelected_removes_from_download_list()
+    public async Task OpenFolder_with_recorded_but_missing_directory_sets_status()
     {
+        await _settings.SetDownloadDirectoryAsync(Path.Combine(_paths.Root, "dl"));
         await _vm.RefreshCommand.ExecuteAsync(null);
-        var id = _vm.Users[0].Model.Id;
-        _vm.Users[0].IsSelected = true;
-        await _vm.AddSelectedToListCommand.ExecuteAsync(null);
-        _vm.Users.Single(r => r.Model.Id == id).IsSelected = true;
-        await _vm.SkipSelectedCommand.ExecuteAsync(null);
-        var user = _db.Users.AsNoTracking().Single(u => u.Id == id);
-        Assert.True(user.IsSkipped);
-        Assert.False(user.InDownloadList);
+        var alice = _vm.Users[0].Model;
+        var job = new DownloadJob
+        { AccountId = _account.Id, TargetKind = TargetKind.UserMedia, UserId = alice.Id, Status = JobStatus.Completed, CreatedAt = DateTime.UtcNow };
+        _db.Jobs.Add(job);
+        await _db.SaveChangesAsync();
+        var missing = Path.Combine(Path.GetTempPath(), "ggui-missing-user-dir-" + Guid.NewGuid().ToString("N"), "a.jpg");
+        _db.Files.Add(new DownloadFile
+        { JobId = job.Id, UserId = alice.Id, SourceItemId = "1", Url = "u", FilePath = missing, FileSize = 1, Status = FileStatus.Downloaded, CreatedAt = DateTime.UtcNow });
+        await _db.SaveChangesAsync();
+
+        await _vm.Users[0].OpenFolderCommand.ExecuteAsync(null);
+        Assert.Equal("目录不存在", _vm.StatusMessage);
     }
 
     // 修复波 F4：两态全选 → 逐行 IsSelected 且 SelectedCount 同步更新

@@ -39,14 +39,14 @@ public class StatsAndRecoveryTests : IDisposable
     { JobId = _job.Id, UserId = userId, SourceItemId = itemId, Url = "u", FilePath = "p", Status = status, CreatedAt = DateTime.UtcNow };
 
     [Fact]
-    public async Task Apply_counts_only_downloaded_user_files()
+    public async Task Apply_counts_one_session_not_downloaded_files()
     {
         var stats = new StatsAggregator(new SingleDbContextFactory(_db));
 
         await stats.ApplyJobCompletionAsync(_job.Id);
 
         var user = await _db.Users.AsNoTracking().SingleAsync(u => u.Id == _alice.Id); // 适配：ExecuteUpdate 绕过变更跟踪器，跟踪查询会返回陈旧实例（同 UserServiceTests）
-        Assert.Equal(3, user.DownloadCount);
+        Assert.Equal(1, user.DownloadCount);
         Assert.NotNull(user.LastDownloadAt);
     }
 
@@ -65,6 +65,36 @@ public class StatsAndRecoveryTests : IDisposable
         _db.SaveChanges();
 
         await stats.ApplyJobCompletionAsync(job2.Id);
-        Assert.Equal(4, (await _db.Users.AsNoTracking().SingleAsync(u => u.Id == _alice.Id)).DownloadCount); // 适配：同上，AsNoTracking 读库中真实状态
+        Assert.Equal(2, (await _db.Users.AsNoTracking().SingleAsync(u => u.Id == _alice.Id)).DownloadCount); // 适配：同上，AsNoTracking 读库中真实状态
+    }
+
+    [Fact]
+    public async Task Apply_ignores_jobs_without_user()
+    {
+        var likes = new DownloadJob
+        { AccountId = _job.AccountId, TargetKind = TargetKind.AccountLikes, UserId = null, Status = JobStatus.Completed, CreatedAt = DateTime.UtcNow };
+        _db.Jobs.Add(likes);
+        _db.SaveChanges();
+
+        var stats = new StatsAggregator(new SingleDbContextFactory(_db));
+        await stats.ApplyJobCompletionAsync(likes.Id);
+
+        Assert.Equal(0, (await _db.Users.AsNoTracking().SingleAsync(u => u.Id == _alice.Id)).DownloadCount);
+    }
+
+    [Fact]
+    public async Task Recalculate_replaces_file_counts_with_session_counts()
+    {
+        _alice.DownloadCount = 876;
+        _db.SaveChanges();
+        var job2 = new DownloadJob
+        { AccountId = _job.AccountId, TargetKind = TargetKind.UserMedia, UserId = _alice.Id, Status = JobStatus.Completed, CreatedAt = DateTime.UtcNow };
+        _db.Jobs.Add(job2);
+        _db.SaveChanges();
+
+        var stats = new StatsAggregator(new SingleDbContextFactory(_db));
+        await stats.RecalculateDownloadCountsAsync();
+
+        Assert.Equal(2, (await _db.Users.AsNoTracking().SingleAsync(u => u.Id == _alice.Id)).DownloadCount);
     }
 }

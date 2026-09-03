@@ -101,37 +101,13 @@ public partial class ImportViewModel : ObservableObject
                 ResultMessage = result.Error; // "Cookie 无效或已过期，请重新导出"（AccountService.VerifyAsync）
                 return false;
             }
-            ResultMessage = $"账号 @{result.Account.ScreenName} 导入成功，可到用户管理页导入关注列表";
+            ResultMessage = $"账号 @{result.Account.ScreenName} 导入成功，可到用户管理页从关注列表选择用户";
             OnImportSucceeded();
             return true;
         }
         catch (Exception ex)
         {
             ResultMessage = $"导入失败：{ex.Message}";
-            return false;
-        }
-        finally { IsBusy = false; }
-    }
-
-    public async Task<bool> ImportFollowingAsync(CancellationToken ct = default)
-    {
-        var account = await _accountQuery.GetActiveAsync(SiteId, ct);
-        if (account is null)
-        {
-            ResultMessage = "请先导入 Cookie";
-            return false;
-        }
-        try
-        {
-            IsBusy = true;
-            var count = await _users.ImportFollowingAsync(account, ct);
-            ResultMessage = $"已导入 {count} 个关注用户";
-            OnImportSucceeded();
-            return true;
-        }
-        catch (Exception ex) // EngineException 等
-        {
-            ResultMessage = ex.Message;
             return false;
         }
         finally { IsBusy = false; }

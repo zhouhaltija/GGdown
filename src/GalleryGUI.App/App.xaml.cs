@@ -75,6 +75,7 @@ public partial class App : Application
         // 且构造函数解析一次，实例与页面同生命周期，语义等同。
         services.AddTransient<SettingsViewModel>();
         services.AddTransient<ImportViewModel>(); // B4：每次打开对话框取新实例（UserInput/ResultMessage 不串台）
+        services.AddTransient<FollowingPickerViewModel>();
         services.AddSingleton<SiteSwitcherViewModel>();
         Services = services.BuildServiceProvider();
         try { Services.GetRequiredService<ICurrentSite>().LoadAsync().GetAwaiter().GetResult(); }
@@ -92,6 +93,8 @@ public partial class App : Application
                 // 全新机器上首跑会因缺表使恢复与所有页面查询失败，故在首次触库前先建库
                 await DbInitializer.InitializeAsync(
                     scope.ServiceProvider.GetRequiredService<GalleryDbContext>());
+                await scope.ServiceProvider.GetRequiredService<StatsAggregator>()
+                    .RecalculateDownloadCountsAsync();
                 // Global Constraint：启动即应用保存的并发数（此前仅设置页应用，未访问设置页不生效）
                 var queue = scope.ServiceProvider.GetRequiredService<IDownloadQueueService>();
                 queue.Concurrency = await scope.ServiceProvider.GetRequiredService<IAppSettings>()

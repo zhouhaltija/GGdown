@@ -1,10 +1,14 @@
+using System.ComponentModel;
 using GalleryGUI.App.Infrastructure;
 using GalleryGUI.App.Views.Dialogs;
 using GalleryGUI.ViewModels;
+using CommunityToolkit.WinUI.UI.Controls;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
+using Microsoft.UI.Xaml.Media;
 using Microsoft.UI.Xaml.Navigation;
+using Windows.UI;
 
 namespace GalleryGUI.App.Views;
 
@@ -20,6 +24,7 @@ public sealed partial class UsersPage : Page
         // B4 接线：占位事件 → ContentDialog（对话框为页面级 UI，不进 VM）
         Vm.ShowAddUserRequested += OnShowAddUserRequested;
         Vm.ShowImportCookieRequested += OnShowImportCookieRequested;
+        Vm.ShowFollowingListRequested += OnShowFollowingListRequested;
     }
 
     protected override async void OnNavigatedTo(NavigationEventArgs e)
@@ -80,15 +85,19 @@ public sealed partial class UsersPage : Page
     private void OnEmptyStateImportCookieClick(object sender, RoutedEventArgs e)
         => OnShowImportCookieRequested();
 
-    // 空状态 ③："导入关注列表"按钮 → ImportViewModel.ImportFollowingAsync（无账号时按钮禁用，见 XAML）
-    private async void OnEmptyStateImportFollowingClick(object sender, RoutedEventArgs e)
+    private void OnEmptyStateFollowingListClick(object sender, RoutedEventArgs e)
+        => OnShowFollowingListRequested();
+
+    private async void OnShowFollowingListRequested()
     {
         try
         {
-            var vm = App.Current.Services.GetRequiredService<ImportViewModel>();
-            vm.ImportCompleted += OnImportCompleted;
-            await vm.ImportFollowingAsync();
-            Vm.StatusMessage = vm.ResultMessage;
+            var picker = App.Current.Services.GetRequiredService<FollowingPickerViewModel>();
+            picker.ImportCompleted += OnImportCompleted;
+            var dialog = new FollowingListDialog(picker) { XamlRoot = App.Current.MainWindow.DialogXamlRoot };
+            if (await dialog.ShowAsync() != ContentDialogResult.Primary) return;
+            await picker.AddSelectedAsync();
+            Vm.StatusMessage = picker.ResultMessage;
         }
         catch (Exception ex)
         {
@@ -125,4 +134,40 @@ public sealed partial class UsersPage : Page
     private void OnSelectAllChecked(object sender, RoutedEventArgs e) => Vm.SelectAll(true);
 
     private void OnSelectAllUnchecked(object sender, RoutedEventArgs e) => Vm.SelectAll(false);
+
+    // 勾选是真正的多选；表格自带的当前行高亮会另涂一层深灰，这里清掉。
+    private bool _clearingGridSelection;
+    private void OnUsersGridSelectionChanged(object sender, SelectionChangedEventArgs e)
+    {
+        if (_clearingGridSelection || UsersGrid.SelectedItem is null) return;
+        _clearingGridSelection = true;
+        UsersGrid.SelectedItem = null;
+        _clearingGridSelection = false;
+    }
+
+    private readonly Dictionary<DataGridRow, (UserRowViewModel Vm, PropertyChangedEventHandler Handler)> _rowBinds = [];
+    private static readonly Brush SelectedRowBrush = new SolidColorBrush(Color.FromArgb(0x1F, 0x00, 0x78, 0xD4));
+
+    private void OnUsersGridLoadingRow(object sender, DataGridRowEventArgs e)
+    {
+        if (e.Row.DataContext is not UserRowViewModel vm) return;
+        PropertyChangedEventHandler handler = (_, args) =>
+        {
+            if (args.PropertyName is null or nameof(UserRowViewModel.IsSelected))
+                ApplyRowHighlight(e.Row, vm);
+        };
+        vm.PropertyChanged += handler;
+        _rowBinds[e.Row] = (vm, handler);
+        ApplyRowHighlight(e.Row, vm);
+    }
+
+    private void OnUsersGridUnloadingRow(object sender, DataGridRowEventArgs e)
+    {
+        if (!_rowBinds.Remove(e.Row, out var bind)) return;
+        bind.Vm.PropertyChanged -= bind.Handler;
+        e.Row.Background = null;
+    }
+
+    private static void ApplyRowHighlight(DataGridRow row, UserRowViewModel vm)
+        => row.Background = vm.IsSelected ? SelectedRowBrush : null;
 }

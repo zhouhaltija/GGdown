@@ -49,8 +49,19 @@ public sealed class FakeEngine : IDownloadEngine
     public Task<AccountInfo> WhoAmIAsync(string cookiesFile, CancellationToken ct = default)
         => WhoAmIError is not null ? Task.FromException<AccountInfo>(WhoAmIError) : Task.FromResult(WhoAmI);
 
-    public Task<IReadOnlyList<SiteUserInfo>> ListFollowingAsync(string cookiesFile, CancellationToken ct = default)
-        => Task.FromResult(NextFollowing);
+    public TaskCompletionSource<IReadOnlyList<SiteUserInfo>>? FollowingDelay { get; set; }
+    public Exception? ListFollowingError { get; set; }
+    public int ListFollowingCalls { get; private set; }
+
+    public async Task<IReadOnlyList<SiteUserInfo>> ListFollowingAsync(string cookiesFile, CancellationToken ct = default)
+    {
+        ListFollowingCalls++;
+        if (ListFollowingError is not null)
+            return await Task.FromException<IReadOnlyList<SiteUserInfo>>(ListFollowingError);
+        if (FollowingDelay is not null)
+            return await FollowingDelay.Task.WaitAsync(ct);
+        return NextFollowing;
+    }
 
     public Task<SiteUserInfo> GetUserInfoAsync(string cookiesFile, string input, CancellationToken ct = default)
         => Task.FromResult(NextUserInfo);
@@ -111,4 +122,7 @@ public sealed class FakeStats : StatsAggregator
         AppliedJobIds.Add(jobId);
         return Task.CompletedTask;
     }
+
+    public override Task RecalculateDownloadCountsAsync(CancellationToken ct = default)
+        => Task.CompletedTask;
 }

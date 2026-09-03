@@ -71,3 +71,15 @@ public sealed class DownloadFile
 }
 
 public sealed class SettingEntry { public required string Key { get; set; } public string? Value { get; set; } }
+
+public sealed class FollowingCacheEntry
+{
+    public long Id { get; set; }
+    public string SiteId { get; set; } = string.Empty;
+    public string RestId { get; set; } = string.Empty;
+    public string ScreenName { get; set; } = string.Empty;
+    public string? DisplayName { get; set; }
+    public string? AvatarUrl { get; set; }
+    public int SortOrder { get; set; }
+    public DateTime FetchedAt { get; set; }
+}

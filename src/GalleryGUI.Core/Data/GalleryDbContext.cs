@@ -9,6 +9,7 @@ public sealed class GalleryDbContext(DbContextOptions<GalleryDbContext> options)
     public DbSet<DownloadJob> Jobs => Set<DownloadJob>();
     public DbSet<DownloadFile> Files => Set<DownloadFile>();
     public DbSet<SettingEntry> Settings => Set<SettingEntry>();
+    public DbSet<FollowingCacheEntry> FollowingCache => Set<FollowingCacheEntry>();
 
     protected override void OnModelCreating(ModelBuilder b)
     {
@@ -36,5 +37,11 @@ public sealed class GalleryDbContext(DbContextOptions<GalleryDbContext> options)
             e.HasOne<DownloadJob>().WithMany(j => j.Files).HasForeignKey(f => f.JobId); // 控制器裁定：双向导航
         });
         b.Entity<SettingEntry>(e => e.HasKey(s => s.Key));
+        b.Entity<FollowingCacheEntry>(e =>
+        {
+            e.ToTable("FollowingCache");
+            e.HasIndex(x => new { x.SiteId, x.RestId }).IsUnique();
+            e.HasIndex(x => new { x.SiteId, x.SortOrder });
+        });
     }
 }

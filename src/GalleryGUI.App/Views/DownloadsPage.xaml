@@ -7,7 +7,6 @@
     <Grid>
         <Grid.RowDefinitions>
             <RowDefinition Height="Auto"/>   <!-- 按钮行 -->
-            <RowDefinition Height="Auto"/>   <!-- 待下载清单 -->
             <RowDefinition Height="*"/>      <!-- 任务卡片列表 -->
         </Grid.RowDefinitions>
         <StackPanel Orientation="Horizontal" Spacing="8" Padding="12,8"
@@ -20,53 +19,7 @@
         <TextBlock Grid.Row="0" Padding="12,8" Opacity="0.8" TextWrapping="Wrap"
                    Text="{x:Bind Vm.ComingSoonMessage, Mode=OneWay}"
                    Visibility="{x:Bind conv:UiConv.ToVisibility(Vm.ShowComingSoon), Mode=OneWay}"/>
-        <Border Grid.Row="1" Margin="12,0,12,8" Padding="12,8" CornerRadius="4"
-                Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
-                BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}" BorderThickness="1"
-                Visibility="{x:Bind conv:UiConv.ToVisibility(Vm.IsSiteAvailable), Mode=OneWay}">
-            <StackPanel Spacing="8">
-                <Grid ColumnSpacing="12">
-                    <Grid.ColumnDefinitions>
-                        <ColumnDefinition Width="*"/>
-                        <ColumnDefinition Width="Auto"/>
-                    </Grid.ColumnDefinitions>
-                    <TextBlock Text="{x:Bind Vm.DownloadListHeader, Mode=OneWay}" FontWeight="SemiBold"
-                               VerticalAlignment="Center"/>
-                    <Button Grid.Column="1" Content="全部开始" Style="{StaticResource AccentButtonStyle}"
-                            Command="{x:Bind Vm.StartDownloadListCommand}"
-                            IsEnabled="{x:Bind Vm.HasDownloadList, Mode=OneWay}"/>
-                </Grid>
-                <TextBlock Text="暂无待下载用户，请在用户管理中加入清单" Opacity="0.7"
-                           Visibility="{x:Bind conv:UiConv.ToInverseVisibility(Vm.HasDownloadList), Mode=OneWay}"/>
-                <ScrollViewer MaxHeight="180"
-                              Visibility="{x:Bind conv:UiConv.ToVisibility(Vm.HasDownloadList), Mode=OneWay}">
-                    <ItemsControl ItemsSource="{x:Bind Vm.DownloadList, Mode=OneWay}">
-                        <ItemsControl.ItemsPanel>
-                            <ItemsPanelTemplate>
-                                <StackPanel Spacing="4"/>
-                            </ItemsPanelTemplate>
-                        </ItemsControl.ItemsPanel>
-                        <ItemsControl.ItemTemplate>
-                            <DataTemplate x:DataType="vm:DownloadListItemViewModel">
-                                <Grid ColumnSpacing="8" Padding="0,2">
-                                    <Grid.ColumnDefinitions>
-                                        <ColumnDefinition Width="*"/>
-                                        <ColumnDefinition Width="Auto"/>
-                                    </Grid.ColumnDefinitions>
-                                    <StackPanel>
-                                        <TextBlock Text="{x:Bind Title}" FontWeight="SemiBold"/>
-                                        <TextBlock Text="{x:Bind Subtitle}" FontSize="12" Opacity="0.7"/>
-                                    </StackPanel>
-                                    <Button Grid.Column="1" Content="移出" Command="{x:Bind RemoveCommand}"
-                                            Padding="8,2" VerticalAlignment="Center"/>
-                                </Grid>
-                            </DataTemplate>
-                        </ItemsControl.ItemTemplate>
-                    </ItemsControl>
-                </ScrollViewer>
-            </StackPanel>
-        </Border>
-        <ScrollViewer Grid.Row="2" Padding="12,0,12,12"
+        <ScrollViewer Grid.Row="1" Padding="12,0,12,12"
                       Visibility="{x:Bind conv:UiConv.ToInverseVisibility(Vm.ShowComingSoon), Mode=OneWay}">
             <ItemsControl ItemsSource="{x:Bind Vm.Jobs, Mode=OneWay}">
                 <ItemsControl.ItemsPanel>

@@ -88,11 +88,4 @@ public class ImportViewModelTests : IDisposable
         Assert.Single(_db.Accounts.Where(a => a.Status == AccountStatus.Invalid));
     }
 
-    [Fact]
-    public async Task ImportFollowing_without_account_is_blocked()
-    {
-        await _db.Accounts.ExecuteDeleteAsync(); // 偏离 2（见报告）：brief 用例体未清账号，但组装播种了活动账号——同 UsersViewModelTests 无账号用例先清空
-        Assert.False(await _vm.ImportFollowingAsync());
-        Assert.Contains("Cookie", _vm.ResultMessage);
-    }
 }

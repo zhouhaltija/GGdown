@@ -7,9 +7,14 @@ using Microsoft.Extensions.Logging;
 
 namespace GalleryGUI.Services;
 
+public sealed record FollowingCacheSnapshot(IReadOnlyList<SiteUserInfo> Users, DateTime FetchedAt);
+
 public interface IUserService
 {
-    Task<int> ImportFollowingAsync(Account account, CancellationToken ct = default);
+    Task<IReadOnlyList<SiteUserInfo>> ListFollowingAsync(Account account, CancellationToken ct = default);
+    Task<FollowingCacheSnapshot?> GetFollowingCacheAsync(Account account, CancellationToken ct = default);
+    Task SaveFollowingCacheAsync(Account account, IReadOnlyList<SiteUserInfo> users, CancellationToken ct = default);
+    Task<int> AddFollowingUsersAsync(Account account, IReadOnlyList<SiteUserInfo> selected, CancellationToken ct = default);
     Task<User> AddUserAsync(Account account, string input, CancellationToken ct = default);
     Task RemoveAsync(IReadOnlyList<long> userIds, CancellationToken ct = default);
     Task SetPinnedAsync(long userId, bool pinned, CancellationToken ct = default);
@@ -24,17 +29,61 @@ public sealed class UserService(
     SiteRegistry sites,
     ILogger<UserService> log) : IUserService
 {
-    public async Task<int> ImportFollowingAsync(Account account, CancellationToken ct = default)
+    public async Task<IReadOnlyList<SiteUserInfo>> ListFollowingAsync(Account account, CancellationToken ct = default)
     {
         var cookies = AccountService.AbsoluteCookiePath(paths, account);
-        var followed = await engine.ListFollowingAsync(cookies, ct);
+        return await engine.ListFollowingAsync(cookies, ct);
+    }
+
+    public async Task<FollowingCacheSnapshot?> GetFollowingCacheAsync(Account account, CancellationToken ct = default)
+    {
+        var rows = await db.FollowingCache.AsNoTracking()
+            .Where(x => x.SiteId == account.SiteId)
+            .OrderBy(x => x.SortOrder)
+            .ToListAsync(ct);
+        if (rows.Count == 0) return null;
+        return new FollowingCacheSnapshot(
+            rows.Select(x => new SiteUserInfo(x.RestId, x.ScreenName, x.DisplayName, x.AvatarUrl)).ToList(),
+            rows[0].FetchedAt);
+    }
+
+    public async Task SaveFollowingCacheAsync(
+        Account account, IReadOnlyList<SiteUserInfo> users, CancellationToken ct = default)
+    {
+        var now = DateTime.UtcNow;
+        await db.FollowingCache.Where(x => x.SiteId == account.SiteId).ExecuteDeleteAsync(ct);
+        for (var i = 0; i < users.Count; i++)
+        {
+            var u = users[i];
+            db.FollowingCache.Add(new FollowingCacheEntry
+            {
+                SiteId = account.SiteId,
+                RestId = u.RestId,
+                ScreenName = u.ScreenName,
+                DisplayName = u.DisplayName,
+                AvatarUrl = u.AvatarUrl,
+                SortOrder = i,
+                FetchedAt = now,
+            });
+        }
+        await db.SaveChangesAsync(ct);
+    }
+
+    public async Task<int> AddFollowingUsersAsync(
+        Account account, IReadOnlyList<SiteUserInfo> selected, CancellationToken ct = default)
+    {
         var provider = sites.Get(account.SiteId);
-        foreach (var info in followed)
+        var added = 0;
+        foreach (var info in selected)
+        {
+            var existed = await db.Users
+                .AnyAsync(u => u.SiteId == account.SiteId && u.RestId == info.RestId, ct);
             await UpsertAsync(account, info, UserSource.Following, provider, ct);
-        // B8 警告清理：CS9113（log 主构造参数未读）——顺手补一条信息级结果日志，手测项 3 可据此核对导入数量
-        log.LogInformation("导入关注列表：{SiteId}/{ScreenName} 共 {Count} 人",
-            account.SiteId, account.ScreenName, followed.Count);
-        return followed.Count;
+            if (!existed) added++;
+        }
+        log.LogInformation("从关注列表添加用户：{SiteId}/{ScreenName} 选 {Selected} 人，新增 {Added} 人",
+            account.SiteId, account.ScreenName, selected.Count, added);
+        return added;
     }
 
     public async Task<User> AddUserAsync(Account account, string input, CancellationToken ct = default)

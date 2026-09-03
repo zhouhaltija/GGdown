@@ -36,21 +36,50 @@ public class UserServiceTests : IDisposable
     }
 
     [Fact]
-    public async Task ImportFollowing_upserts_users()
+    public async Task ListFollowing_returns_engine_following()
     {
-        var count = await _svc.ImportFollowingAsync(_account);
-        Assert.Equal(2, count);
+        var followed = await _svc.ListFollowingAsync(_account);
+        Assert.Equal(["alice", "bob"], followed.Select(u => u.ScreenName));
+        Assert.Empty(_t.Item2.Users);
+    }
 
-        // 二次导入不产生重复，且资料被刷新
-        _engine.NextFollowing = [new SiteUserInfo("1", "alice2", "Alice Renamed", "https://x/a2.png")];
-        var count2 = await _svc.ImportFollowingAsync(_account);
-        Assert.Equal(1, count2);
+    [Fact]
+    public async Task Following_cache_roundtrip_replaces_previous()
+    {
+        Assert.Null(await _svc.GetFollowingCacheAsync(_account));
+        var first = await _svc.ListFollowingAsync(_account);
+        await _svc.SaveFollowingCacheAsync(_account, first);
+        var cached = await _svc.GetFollowingCacheAsync(_account);
+        Assert.Equal(["alice", "bob"], cached!.Users.Select(u => u.ScreenName));
+
+        await _svc.SaveFollowingCacheAsync(_account, [new SiteUserInfo("9", "zoe", "Zoe", null)]);
+        var again = await _svc.GetFollowingCacheAsync(_account);
+        Assert.Equal(["zoe"], again!.Users.Select(u => u.ScreenName));
+    }
+
+    [Fact]
+    public async Task AddFollowingUsers_adds_only_selected()
+    {
+        var followed = await _svc.ListFollowingAsync(_account);
+        var added = await _svc.AddFollowingUsersAsync(_account, [followed[0]]);
+        Assert.Equal(1, added);
+        Assert.Equal("alice", _t.Item2.Users.Single().ScreenName);
+    }
+
+    [Fact]
+    public async Task AddFollowingUsers_upserts_existing_without_duplicate()
+    {
+        var alice = new SiteUserInfo("1", "alice", "Alice", "https://x/a.png");
+        await _svc.AddFollowingUsersAsync(_account, [alice]);
+
+        var renamed = new SiteUserInfo("1", "alice2", "Alice Renamed", "https://x/a2.png");
+        var added = await _svc.AddFollowingUsersAsync(_account, [renamed]);
+        Assert.Equal(0, added);
         var users = _t.Item2.Users.ToList();
-        Assert.Equal(2, users.Count);
-        var alice = users.Single(u => u.RestId == "1");
-        Assert.Equal("alice2", alice.ScreenName);
-        Assert.Equal(UserSource.Following, alice.Source);
-        Assert.Equal("https://x.com/alice2", alice.ProfileUrl);
+        Assert.Single(users);
+        Assert.Equal("alice2", users[0].ScreenName);
+        Assert.Equal(UserSource.Following, users[0].Source);
+        Assert.Equal("https://x.com/alice2", users[0].ProfileUrl);
     }
 
     [Fact]
@@ -96,8 +125,8 @@ public class UserServiceTests : IDisposable
         await _svc.SetSkippedAsync([u.Id], true);
         Assert.True(_t.Item2.Users.AsNoTracking().Single(x => x.Id == u.Id).IsSkipped);
 
-        _engine.NextFollowing = [new SiteUserInfo(u.RestId, "alice", "Alice", "https://x/a.png")];
-        await _svc.ImportFollowingAsync(_account);
+        await _svc.AddFollowingUsersAsync(_account,
+            [new SiteUserInfo(u.RestId, "alice", "Alice", "https://x/a.png")]);
         Assert.True(_t.Item2.Users.AsNoTracking().Single(x => x.RestId == u.RestId).IsSkipped);
 
         await _svc.SetSkippedAsync([u.Id], false);
