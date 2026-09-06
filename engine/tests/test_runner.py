@@ -3,8 +3,27 @@ import sys
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
-from sites import apply_proxy_from_env, classify_error, configure_stdio, emit, parse_screen_name, walk_config
+from sites import apply_proxy_from_env, classify_error, configure_stdio, emit, load_site, parse_screen_name, walk_config
 import pytest
+
+
+def test_load_site_twitter():
+    mod = load_site("twitter")
+    assert hasattr(mod, "whoami")
+    assert hasattr(mod, "list_following")
+    assert hasattr(mod, "user_info")
+
+
+def test_load_site_pixiv():
+    mod = load_site("pixiv")
+    assert hasattr(mod, "whoami")
+    assert hasattr(mod, "list_following")
+    assert hasattr(mod, "user_info")
+
+
+def test_load_site_unknown_raises():
+    with pytest.raises(ValueError, match="unknown site"):
+        load_site("nope")
 
 
 def test_configure_stdio_allows_star_operator():

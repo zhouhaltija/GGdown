@@ -54,8 +54,20 @@ public class RunnerEngineTests : IDisposable
     {
         var python = LocatePython();
         Skip.If(python is null, "本机无 Python");
-        var info = await CreateEngine(python!).WhoAmIAsync("good.txt");
+        var info = await CreateEngine(python!).WhoAmIAsync("twitter", "good.txt");
         Assert.Equal("stub_user", info.ScreenName);
+        Assert.Equal("99", info.RestId);
+    }
+
+    [SkippableFact]
+    public async Task WhoAmI_passes_site_id_and_returns_pixiv_account()
+    {
+        var python = LocatePython();
+        Skip.If(python is null, "本机无 Python");
+        var info = await CreateEngine(python!).WhoAmIAsync("pixiv", "good.txt");
+        Assert.Equal("pixiv_user", info.ScreenName);
+        Assert.Equal("12345", info.RestId);
+        Assert.Equal("Pixiv User", info.DisplayName);
     }
 
     [SkippableFact]
@@ -64,7 +76,7 @@ public class RunnerEngineTests : IDisposable
         var python = LocatePython();
         Skip.If(python is null, "本机无 Python");
         await Assert.ThrowsAsync<AuthException>(
-            () => CreateEngine(python!).WhoAmIAsync("bad.txt"));
+            () => CreateEngine(python!).WhoAmIAsync("twitter", "bad.txt"));
     }
 
     [SkippableFact]
@@ -72,7 +84,7 @@ public class RunnerEngineTests : IDisposable
     {
         var python = LocatePython();
         Skip.If(python is null, "本机无 Python");
-        var users = await CreateEngine(python!).ListFollowingAsync("good.txt");
+        var users = await CreateEngine(python!).ListFollowingAsync("twitter", "good.txt");
         Assert.Equal(2, users.Count);
         Assert.Equal("alice", users[0].ScreenName);
         Assert.Equal("bob", users[1].ScreenName);

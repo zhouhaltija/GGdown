@@ -42,29 +42,33 @@ public sealed class RunnerEngine(
         return hello;
     }
 
-    public async Task<AccountInfo> WhoAmIAsync(string cookiesFile, CancellationToken ct = default)
+    public async Task<AccountInfo> WhoAmIAsync(string siteId, string cookiesFile, CancellationToken ct = default)
     {
         AccountInfo? account = null;
-        var result = await RunAsync(["whoami", "--site", "twitter", "--cookies", cookiesFile],
-            ev => { if (ev.Event == "account") account = new AccountInfo(ev.ScreenName ?? "?", ev.DisplayName); },
+        var result = await RunAsync(["whoami", "--site", siteId, "--cookies", cookiesFile],
+            ev =>
+            {
+                if (ev.Event == "account")
+                    account = new AccountInfo(ev.ScreenName ?? "?", ev.DisplayName, ev.RestId);
+            },
             ct, killOnCancel: false);
         return account ?? throw EngineError(result);
     }
 
-    public async Task<IReadOnlyList<SiteUserInfo>> ListFollowingAsync(string cookiesFile, CancellationToken ct = default)
+    public async Task<IReadOnlyList<SiteUserInfo>> ListFollowingAsync(string siteId, string cookiesFile, CancellationToken ct = default)
     {
         var users = new List<SiteUserInfo>();
-        var result = await RunAsync(["list-following", "--site", "twitter", "--cookies", cookiesFile],
+        var result = await RunAsync(["list-following", "--site", siteId, "--cookies", cookiesFile],
             ev => { if (ev.Event == "user" && ev.RestId is not null) users.Add(ToUser(ev)); },
             ct, killOnCancel: false);
         if (users.Count == 0 && result.ExitCode != 0) throw EngineError(result);
         return users;
     }
 
-    public async Task<SiteUserInfo> GetUserInfoAsync(string cookiesFile, string input, CancellationToken ct = default)
+    public async Task<SiteUserInfo> GetUserInfoAsync(string siteId, string cookiesFile, string input, CancellationToken ct = default)
     {
         SiteUserInfo? user = null;
-        var result = await RunAsync(["user-info", "--site", "twitter", "--cookies", cookiesFile, "--input", input],
+        var result = await RunAsync(["user-info", "--site", siteId, "--cookies", cookiesFile, "--input", input],
             ev => { if (ev.Event == "user" && user is null) user = ToUser(ev); },
             ct, killOnCancel: false);
         return user ?? throw EngineError(result);
@@ -102,7 +106,8 @@ public sealed class RunnerEngine(
     }
 
     private static SiteUserInfo ToUser(EngineEvent ev) =>
-        new(ev.RestId!, ev.ScreenName ?? "?", ev.DisplayName, ev.AvatarUrl);
+        new(ev.RestId!, ev.ScreenName ?? "?", ev.DisplayName, ev.AvatarUrl,
+            ev.BannerUrl, ev.Bio, ev.FollowersCount, ev.MediaCount);
 
     private static EngineException EngineError(RunnerResult result) =>
         result.ExitCode == 2

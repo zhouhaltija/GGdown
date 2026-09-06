@@ -1,4 +1,6 @@
 using Microsoft.UI.Xaml;
+using Microsoft.UI.Xaml.Media;
+using Microsoft.UI.Xaml.Media.Imaging;
 
 namespace GalleryGUI.App.Infrastructure;
 
@@ -12,4 +14,27 @@ public static class UiConv
     public static Visibility ToVisibility(bool visible) => visible ? Visibility.Visible : Visibility.Collapsed;
 
     public static Visibility ToInverseVisibility(bool visible) => visible ? Visibility.Collapsed : Visibility.Visible;
+
+    public static ImageSource? ToImageSource(string? pathOrUri)
+    {
+        if (string.IsNullOrWhiteSpace(pathOrUri)) return null;
+        try
+        {
+            Uri uri;
+            if (pathOrUri.StartsWith("file:", StringComparison.OrdinalIgnoreCase)
+                || pathOrUri.StartsWith("http", StringComparison.OrdinalIgnoreCase))
+                uri = new Uri(pathOrUri);
+            else
+            {
+                var full = Path.GetFullPath(pathOrUri);
+                if (!File.Exists(full)) return null;
+                uri = new Uri("file:///" + full.Replace('\\', '/'));
+            }
+            return new BitmapImage(uri);
+        }
+        catch (Exception)
+        {
+            return null;
+        }
+    }
 }

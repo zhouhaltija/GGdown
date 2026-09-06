@@ -61,6 +61,17 @@ public class JsonlParserTests
     }
 
     [Fact]
+    public void Parses_account_event_with_rest_id()
+    {
+        var ev = JsonlParser.Parse(
+            """{"ev":"account","screen_name":"alice","display_name":"Alice","rest_id":"99"}""");
+        Assert.Equal("account", ev!.Event);
+        Assert.Equal("alice", ev.ScreenName);
+        Assert.Equal("Alice", ev.DisplayName);
+        Assert.Equal("99", ev.RestId);
+    }
+
+    [Fact]
     public void Parses_user_event()
     {
         var ev = JsonlParser.Parse(
@@ -70,6 +81,17 @@ public class JsonlParserTests
         Assert.Equal("elonmusk", ev.ScreenName);
         Assert.Equal("Elon Musk", ev.DisplayName);
         Assert.Equal("https://pbs.twimg.com/a.jpg", ev.AvatarUrl);
+    }
+
+    [Fact]
+    public void Parses_user_profile_fields()
+    {
+        var ev = JsonlParser.Parse(
+            """{"ev":"user","rest_id":"1","screen_name":"a","banner_url":"https://pbs.twimg.com/b.jpg","bio":"hi","followers_count":12,"media_count":3}""");
+        Assert.Equal("https://pbs.twimg.com/b.jpg", ev!.BannerUrl);
+        Assert.Equal("hi", ev.Bio);
+        Assert.Equal(12L, ev.FollowersCount);
+        Assert.Equal(3L, ev.MediaCount);
     }
 
     [Fact]

@@ -16,6 +16,7 @@ public interface IUserService
     Task SaveFollowingCacheAsync(Account account, IReadOnlyList<SiteUserInfo> users, CancellationToken ct = default);
     Task<int> AddFollowingUsersAsync(Account account, IReadOnlyList<SiteUserInfo> selected, CancellationToken ct = default);
     Task<User> AddUserAsync(Account account, string input, CancellationToken ct = default);
+    Task<int> RefreshProfilesAsync(Account account, IReadOnlyList<long>? userIds = null, CancellationToken ct = default);
     Task RemoveAsync(IReadOnlyList<long> userIds, CancellationToken ct = default);
     Task SetPinnedAsync(long userId, bool pinned, CancellationToken ct = default);
     Task SetSkippedAsync(IReadOnlyList<long> userIds, bool skipped, CancellationToken ct = default);
@@ -32,7 +33,7 @@ public sealed class UserService(
     public async Task<IReadOnlyList<SiteUserInfo>> ListFollowingAsync(Account account, CancellationToken ct = default)
     {
         var cookies = AccountService.AbsoluteCookiePath(paths, account);
-        return await engine.ListFollowingAsync(cookies, ct);
+        return await engine.ListFollowingAsync(account.SiteId, cookies, ct);
     }
 
     public async Task<FollowingCacheSnapshot?> GetFollowingCacheAsync(Account account, CancellationToken ct = default)
@@ -93,10 +94,28 @@ public sealed class UserService(
         if (!parsed.Ok || parsed.ScreenName is null)
             throw new ArgumentException(parsed.Error ?? "无法识别输入", nameof(input));
         var info = await engine.GetUserInfoAsync(
-            AccountService.AbsoluteCookiePath(paths, account), input, ct);
+            account.SiteId, AccountService.AbsoluteCookiePath(paths, account), input, ct);
         return await UpsertAsync(account, info,
             input.Contains("://") ? UserSource.Link : UserSource.Manual,
             provider, ct);
+    }
+
+    public async Task<int> RefreshProfilesAsync(Account account, IReadOnlyList<long>? userIds = null, CancellationToken ct = default)
+    {
+        var provider = sites.Get(account.SiteId);
+        var cookies = AccountService.AbsoluteCookiePath(paths, account);
+        var query = db.Users.Where(u => u.SiteId == account.SiteId);
+        if (userIds is { Count: > 0 })
+            query = query.Where(u => userIds.Contains(u.Id));
+        var list = await query.ToListAsync(ct);
+        var updated = 0;
+        foreach (var user in list)
+        {
+            var info = await engine.GetUserInfoAsync(account.SiteId, cookies, user.ScreenName, ct);
+            await UpsertAsync(account, info, user.Source, provider, ct);
+            updated++;
+        }
+        return updated;
     }
 
     public async Task RemoveAsync(IReadOnlyList<long> userIds, CancellationToken ct = default)
@@ -149,7 +168,11 @@ public sealed class UserService(
         user.ScreenName = info.ScreenName;
         user.DisplayName = info.DisplayName;
         user.AvatarUrl = info.AvatarUrl;
-        user.ProfileUrl = provider.BuildProfileUrl(info.ScreenName);
+        user.BannerUrl = info.BannerUrl ?? user.BannerUrl;
+        user.Bio = info.Bio ?? user.Bio;
+        user.FollowersCount = info.FollowersCount ?? user.FollowersCount;
+        user.MediaCount = info.MediaCount ?? user.MediaCount;
+        user.ProfileUrl = provider.BuildProfileUrl(info.ScreenName, info.RestId);
         user.Source = source; // 适配：brief 测试断言同一 rest_id 重添加后 Source 以最后一次添加为准（brief 实现更新路径未刷新，以测试为准）
         user.UpdatedAt = DateTime.UtcNow;
         await db.SaveChangesAsync(ct);

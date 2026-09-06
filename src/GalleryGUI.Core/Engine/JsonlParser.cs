@@ -28,6 +28,8 @@ public static class JsonlParser
             Total: L("total"), Skipped: L("skipped"), Failed: L("failed"),
             Protocol: I("protocol"), RunnerVersion: S("runner"), GalleryDlVersion: S("gallery_dl"),
             RestId: S("rest_id"), ScreenName: S("screen_name"),
-            DisplayName: S("display_name"), AvatarUrl: S("avatar_url"));
+            DisplayName: S("display_name"), AvatarUrl: S("avatar_url"),
+            BannerUrl: S("banner_url"), Bio: S("bio"),
+            FollowersCount: L("followers_count"), MediaCount: L("media_count"));
     }
 }

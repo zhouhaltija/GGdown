@@ -41,14 +41,39 @@ public class AccountServiceTests : IDisposable
     [Fact]
     public async Task Import_copies_file_creates_account_and_verifies()
     {
+        _engine.WhoAmI = new AccountInfo("stub_user", "Stub User", "99");
         var result = await _svc.ImportCookiesAsync("twitter", MakeCookiesFile());
         Assert.True(result.Ok);
         Assert.Equal(AccountStatus.Ok, result.Account.Status);
         Assert.Equal("stub_user", result.Account.ScreenName);
+        Assert.Equal("99", result.Account.RestId);
         Assert.True(result.Account.IsActive);
         // 文件已复制到 accounts 目录（不再引用原路径）
         Assert.True(File.Exists(AccountService.AbsoluteCookiePath(_paths, result.Account)));
         Assert.StartsWith($"twitter{Path.DirectorySeparatorChar}", result.Account.CookiePath);
+    }
+
+    [Fact]
+    public async Task Import_writes_refresh_token_beside_cookies()
+    {
+        var result = await _svc.ImportCookiesAsync("twitter", MakeCookiesFile(), "secret-token");
+        Assert.True(result.Ok);
+        var tokenPath = Path.Combine(
+            Path.GetDirectoryName(AccountService.AbsoluteCookiePath(_paths, result.Account))!,
+            "refresh-token.txt");
+        Assert.True(File.Exists(tokenPath));
+        Assert.Equal("secret-token", File.ReadAllText(tokenPath).Trim());
+    }
+
+    [Fact]
+    public async Task Import_pixiv_without_refresh_token_fails()
+    {
+        var svc = new AccountService(_t.Item2, _engine, _paths,
+            new SiteRegistry([new TwitterSiteProvider(), new PixivSiteProvider()]),
+            NullLogger<AccountService>.Instance);
+        var result = await svc.ImportCookiesAsync("pixiv", MakeCookiesFile());
+        Assert.False(result.Ok);
+        Assert.Contains("refresh-token", result.Error, StringComparison.OrdinalIgnoreCase);
     }
 
     [Fact]
@@ -108,10 +133,11 @@ public class AccountServiceTests : IDisposable
         var result = await _svc.VerifyAsync(account);
         Assert.True(result.Ok);
         Assert.Equal("stub_user", result.Account.ScreenName);
+        Assert.Equal("99", result.Account.RestId);
         Assert.NotNull(result.Account.VerifiedAt);
         var reread = _t.Item2.Accounts.AsNoTracking().Single(a => a.SiteId == "twitter" && a.IsActive);
         Assert.Equal(AccountStatus.Ok, reread.Status);
         Assert.Equal("stub_user", reread.ScreenName);
-        Assert.NotNull(reread.VerifiedAt);
+        Assert.Equal("99", reread.RestId);
     }
 }

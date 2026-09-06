@@ -94,6 +94,10 @@
                                         <TextBox Text="{x:Bind TextValue, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
                                                  MinWidth="280"
                                                  Visibility="{x:Bind conv:UiConv.ToVisibility(IsText), Mode=OneWay}"/>
+                                        <ComboBox ItemsSource="{x:Bind Choices}"
+                                                  SelectedItem="{x:Bind TextValue, Mode=TwoWay}"
+                                                  MinWidth="140"
+                                                  Visibility="{x:Bind conv:UiConv.ToVisibility(IsChoice), Mode=OneWay}"/>
                                     </StackPanel>
                                 </Grid>
                             </DataTemplate>

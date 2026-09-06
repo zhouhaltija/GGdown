@@ -2,6 +2,7 @@ using GalleryGUI.Data;
 using GalleryGUI.Engine;
 using GalleryGUI.Paths;
 using GalleryGUI.Services;
+using GalleryGUI.Settings;
 using GalleryGUI.Sites;
 using GalleryGUI.Threading;
 using GalleryGUI.ViewModels;
@@ -36,7 +37,9 @@ public class ImportViewModelTests : IDisposable
         var sites = new SiteRegistry([new TwitterSiteProvider()]);
         var accountSvc = new AccountService(_db, _engine, _paths, sites, NullLogger<AccountService>.Instance);
         var userSvc = new UserService(_db, _engine, _paths, sites, NullLogger<UserService>.Instance);
-        _vm = new ImportViewModel(accountSvc, userSvc, new AccountQueryService(factory), new SyncDispatcher(), sites, new FakeCurrentSite());
+        var settings = new AppSettings(factory, sites);
+        var queue = new DownloadQueueService(factory, _engine, new FakeStats(), _paths, sites, NullLogger<DownloadQueueService>.Instance);
+        _vm = new ImportViewModel(accountSvc, userSvc, new AccountQueryService(factory), queue, settings, new SyncDispatcher(), sites, new FakeCurrentSite());
     }
     public void Dispose()
     {
@@ -52,6 +55,22 @@ public class ImportViewModelTests : IDisposable
         Assert.False(await _vm.AddUserAsync());
         Assert.NotNull(_vm.UserInputError);
         Assert.Empty(_db.Users); // 服务未被调用
+    }
+
+    [Fact]
+    public async Task AddUser_tweet_url_enqueues_permalink_without_creating_user()
+    {
+        var gate = new TaskCompletionSource();
+        _engine.OnDownload = async (_, _, _, ct) => await gate.Task.WaitAsync(ct);
+        _vm.UserInput = "https://x.com/alice/status/12345";
+        _vm.ValidateUserInput();
+        Assert.Null(_vm.UserInputError);
+        Assert.True(await _vm.AddUserAsync());
+        Assert.Contains("已加入下载队列", _vm.ResultMessage);
+        Assert.Empty(_db.Users);
+        Assert.Single(_db.Jobs);
+        Assert.Equal(TargetKind.Permalink, _db.Jobs.Single().TargetKind);
+        gate.SetResult();
     }
 
     [Fact]
@@ -88,4 +107,22 @@ public class ImportViewModelTests : IDisposable
         Assert.Single(_db.Accounts.Where(a => a.Status == AccountStatus.Invalid));
     }
 
+    [Fact]
+    public async Task ImportCookies_pixiv_without_token_reports_error()
+    {
+        var factory = new SingleDbContextFactory(_db);
+        var site = new FakeCurrentSite();
+        await site.SelectAsync("pixiv");
+        var sites = new SiteRegistry([new TwitterSiteProvider(), new PixivSiteProvider()]);
+        var settings = new AppSettings(factory, sites);
+        var queue = new DownloadQueueService(factory, _engine, new FakeStats(), _paths, sites, NullLogger<DownloadQueueService>.Instance);
+        var vm = new ImportViewModel(
+            new AccountService(_db, _engine, _paths, sites, NullLogger<AccountService>.Instance),
+            new UserService(_db, _engine, _paths, sites, NullLogger<UserService>.Instance),
+            new AccountQueryService(factory), queue, settings, new SyncDispatcher(), sites, site);
+        var file = Path.Combine(_paths.TempDir, "pixiv-cookies.txt");
+        await File.WriteAllTextAsync(file, "# Netscape HTTP Cookie File");
+        Assert.False(await vm.ImportCookiesAsync(file));
+        Assert.Contains("refresh-token", vm.ResultMessage, StringComparison.OrdinalIgnoreCase);
+    }
 }

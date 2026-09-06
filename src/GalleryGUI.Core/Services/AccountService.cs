@@ -12,7 +12,8 @@ public sealed record ImportCookiesResult(Account Account, string? Error = null)
 
 public interface IAccountService
 {
-    Task<ImportCookiesResult> ImportCookiesAsync(string siteId, string cookiesFilePath, CancellationToken ct = default);
+    Task<ImportCookiesResult> ImportCookiesAsync(string siteId, string cookiesFilePath,
+        string? refreshToken = null, CancellationToken ct = default);
     Task<ImportCookiesResult> VerifyAsync(Account account, CancellationToken ct = default);
     Task DeleteAsync(Account account, CancellationToken ct = default);
 }
@@ -28,14 +29,21 @@ public sealed class AccountService(
         Path.Combine(paths.AccountsDir, account.CookiePath);
 
     public async Task<ImportCookiesResult> ImportCookiesAsync(
-        string siteId, string cookiesFilePath, CancellationToken ct = default)
+        string siteId, string cookiesFilePath, string? refreshToken = null, CancellationToken ct = default)
     {
-        sites.Get(siteId); // 校验站点存在
+        var provider = sites.Get(siteId); // 校验站点存在
+        if (provider.RequiresRefreshToken && string.IsNullOrWhiteSpace(refreshToken))
+            return new ImportCookiesResult(new Account { SiteId = siteId },
+                "缺少 refresh-token（请运行 gallery-dl oauth:pixiv 后填入）");
+
         var id = Guid.NewGuid().ToString("N");
         var relative = Path.Combine(siteId, id, "cookies.txt");
         var target = Path.Combine(paths.AccountsDir, relative);
         Directory.CreateDirectory(Path.GetDirectoryName(target)!);
         File.Copy(cookiesFilePath, target, overwrite: true);
+        if (!string.IsNullOrWhiteSpace(refreshToken))
+            await File.WriteAllTextAsync(Path.Combine(Path.GetDirectoryName(target)!, "refresh-token.txt"),
+                refreshToken.Trim(), ct);
 
         // 每站点仅一个活动账号：先全部停用
         await db.Accounts
@@ -63,9 +71,10 @@ public sealed class AccountService(
     {
         try
         {
-            var who = await engine.WhoAmIAsync(AbsoluteCookiePath(paths, account), ct);
+            var who = await engine.WhoAmIAsync(account.SiteId, AbsoluteCookiePath(paths, account), ct);
             account.ScreenName = who.ScreenName;
             account.DisplayName = who.DisplayName;
+            account.RestId = who.RestId;
             account.Status = AccountStatus.Ok;
             account.VerifiedAt = DateTime.UtcNow;
         }
@@ -88,6 +97,7 @@ public sealed class AccountService(
             .SetProperty(a => a.Status, account.Status)
             .SetProperty(a => a.ScreenName, account.ScreenName)
             .SetProperty(a => a.DisplayName, account.DisplayName)
+            .SetProperty(a => a.RestId, account.RestId)
             .SetProperty(a => a.VerifiedAt, account.VerifiedAt), ct);
         return account.Status == AccountStatus.Ok
             ? new(account)

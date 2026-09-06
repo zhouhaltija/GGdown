@@ -10,7 +10,8 @@ namespace GalleryGUI.Services;
 
 public sealed record JobSnapshot(
     long JobId, string SiteId, TargetKind Kind, string Title, JobStatus Status,
-    long Done, long Skipped, long Failed, long Total, string? CurrentFile, string? Error);
+    long Done, long Skipped, long Failed, long Total, string? CurrentFile, string? Error,
+    string KindLabel = "", long? UserId = null);
 
 public interface IDownloadQueueService
 {
@@ -22,9 +23,15 @@ public interface IDownloadQueueService
     Task<long> EnqueueUserMediaAsync(Account account, IReadOnlyList<User> users,
         string baseDirectory, IReadOnlyDictionary<string, object?> siteOptions,
         CancellationToken ct = default);        // 每用户一个 DownloadJob 行，返回首个 jobId
+    Task<long> EnqueueUserContentAsync(Account account, IReadOnlyList<User> users, ContentKind kind,
+        string baseDirectory, IReadOnlyDictionary<string, object?> siteOptions,
+        CancellationToken ct = default);
     Task<long> EnqueueAccountContentAsync(Account account, ContentKind kind,
         string baseDirectory, IReadOnlyDictionary<string, object?> siteOptions,
         CancellationToken ct = default);        // likes/bookmarks：单任务，UserId 为空
+    Task<long> EnqueuePermalinkAsync(Account account, string url, string title, ContentKind kind,
+        string baseDirectory, IReadOnlyDictionary<string, object?> siteOptions,
+        CancellationToken ct = default);        // 推文/列表/搜索：单任务，UserId 为空
     Task CancelAsync(long jobId, CancellationToken ct = default);
     Task RecoverOnStartupAsync(CancellationToken ct = default); // 遗留 Running/Pending → Failed("应用异常退出")
 }
@@ -39,9 +46,9 @@ public sealed class DownloadQueueService(
 {
     private sealed record WorkItem(
         long JobId, long AccountId, string SiteId, TargetKind Kind, long? UserId,
-        string TargetScreenName, string Title, string BaseDirectory,
+        string TargetScreenName, string? TargetRestId, string Title, string BaseDirectory,
         IReadOnlyDictionary<string, object?> SiteOptions, string CookieAbsolutePath,
-        string ArchiveFile);
+        string ArchiveFile, string? DirectUrl = null);
 
     private readonly object _gate = new();
     private readonly Dictionary<long, JobSnapshot> _active = [];
@@ -57,10 +64,17 @@ public sealed class DownloadQueueService(
     public event Action<JobSnapshot>? JobRemoved;
     public event Action<long, string>? AccountInvalid;
 
-    public async Task<long> EnqueueUserMediaAsync(Account account, IReadOnlyList<User> users,
+    public Task<long> EnqueueUserMediaAsync(Account account, IReadOnlyList<User> users,
+        string baseDirectory, IReadOnlyDictionary<string, object?> siteOptions, CancellationToken ct = default)
+        => EnqueueUserContentAsync(account, users, ContentKind.UserMedia, baseDirectory, siteOptions, ct);
+
+    public async Task<long> EnqueueUserContentAsync(Account account, IReadOnlyList<User> users, ContentKind kind,
         string baseDirectory, IReadOnlyDictionary<string, object?> siteOptions, CancellationToken ct = default)
     {
         if (users.Count == 0) throw new ArgumentException("至少选择一个用户", nameof(users));
+        if (kind is not (ContentKind.UserMedia or ContentKind.UserNovels or ContentKind.UserHighlights))
+            throw new ArgumentException("仅接受 UserMedia/UserNovels/UserHighlights", nameof(kind));
+        var targetKind = (TargetKind)kind;
         long first = 0;
         var cookieAbs = AccountService.AbsoluteCookiePath(paths, account);
         var archive = Path.Combine(paths.ArchiveDir, account.Id + ".txt");
@@ -69,16 +83,22 @@ public sealed class DownloadQueueService(
         {
             var job = new DownloadJob
             {
-                AccountId = account.Id, TargetKind = TargetKind.UserMedia, UserId = user.Id,
+                AccountId = account.Id, TargetKind = targetKind, UserId = user.Id,
                 Status = JobStatus.Pending, CreatedAt = DateTime.UtcNow,
             };
             db.Jobs.Add(job);
             await db.SaveChangesAsync(ct);
-            if (first == 0) first = job.Id; // 接口契约"返回首个 jobId"：循环内无条件覆盖会在多用户时返回最后一个（审查 Important-1）
-            var title = string.IsNullOrEmpty(user.DisplayName) ? user.ScreenName : user.DisplayName!;
-            AddActive(job.Id, account.SiteId, TargetKind.UserMedia, title, JobStatus.Pending);
-            _pending.Enqueue(new WorkItem(job.Id, account.Id, account.SiteId, TargetKind.UserMedia,
-                user.Id, user.ScreenName, title, baseDirectory, siteOptions, cookieAbs, archive));
+            if (first == 0) first = job.Id;
+            var name = string.IsNullOrEmpty(user.DisplayName) ? user.ScreenName : user.DisplayName!;
+            var title = kind switch
+            {
+                ContentKind.UserNovels => $"{name}（小说）",
+                ContentKind.UserHighlights => $"{name}（高光）",
+                _ => name,
+            };
+            AddActive(job.Id, account.SiteId, targetKind, title, JobStatus.Pending, user.Id);
+            _pending.Enqueue(new WorkItem(job.Id, account.Id, account.SiteId, targetKind,
+                user.Id, user.ScreenName, user.RestId, title, baseDirectory, siteOptions, cookieAbs, archive));
         }
         EnsureWorkers();
         return first;
@@ -87,8 +107,8 @@ public sealed class DownloadQueueService(
     public async Task<long> EnqueueAccountContentAsync(Account account, ContentKind kind,
         string baseDirectory, IReadOnlyDictionary<string, object?> siteOptions, CancellationToken ct = default)
     {
-        if (kind is not (ContentKind.AccountLikes or ContentKind.AccountBookmarks))
-            throw new ArgumentException("仅接受 AccountLikes/AccountBookmarks", nameof(kind));
+        if (kind is not (ContentKind.AccountLikes or ContentKind.AccountBookmarks or ContentKind.AccountNovelBookmarks))
+            throw new ArgumentException("仅接受账号级内容类型", nameof(kind));
         // 适配：brief 原文将 Sites.ContentKind 与 Data.TargetKind 视为同一类型，实际为两个同名同序枚举（UserMedia/AccountLikes/AccountBookmarks），
         // 持久化/快照用 Data.TargetKind，站点计划用 Sites.ContentKind，边界处显式转换（语义一一对应）。
         var targetKind = (TargetKind)kind;
@@ -102,10 +122,35 @@ public sealed class DownloadQueueService(
         };
         db.Jobs.Add(job);
         await db.SaveChangesAsync(ct);
-        var title = kind == ContentKind.AccountLikes ? $"喜欢（@{account.ScreenName}）" : $"书签（@{account.ScreenName}）";
+        var kindLabel = sites.Get(account.SiteId).KindLabel(kind);
+        var title = $"{kindLabel}（@{account.ScreenName}）";
         AddActive(job.Id, account.SiteId, targetKind, title, JobStatus.Pending);
         _pending.Enqueue(new WorkItem(job.Id, account.Id, account.SiteId, targetKind,
-            null, account.ScreenName ?? "me", title, baseDirectory, siteOptions, cookieAbs, archive));
+            null, account.ScreenName ?? "me", account.RestId, title, baseDirectory, siteOptions, cookieAbs, archive));
+        EnsureWorkers();
+        return job.Id;
+    }
+
+    public async Task<long> EnqueuePermalinkAsync(Account account, string url, string title, ContentKind kind,
+        string baseDirectory, IReadOnlyDictionary<string, object?> siteOptions, CancellationToken ct = default)
+    {
+        if (kind is not (ContentKind.Permalink or ContentKind.Search))
+            throw new ArgumentException("仅接受 Permalink/Search", nameof(kind));
+        if (string.IsNullOrWhiteSpace(url)) throw new ArgumentException("URL 不能为空", nameof(url));
+        var targetKind = (TargetKind)kind;
+        var cookieAbs = AccountService.AbsoluteCookiePath(paths, account);
+        var archive = Path.Combine(paths.ArchiveDir, account.Id + ".txt");
+        await using var db = await factory.CreateDbContextAsync(ct);
+        var job = new DownloadJob
+        {
+            AccountId = account.Id, TargetKind = targetKind, UserId = null,
+            Status = JobStatus.Pending, CreatedAt = DateTime.UtcNow,
+        };
+        db.Jobs.Add(job);
+        await db.SaveChangesAsync(ct);
+        AddActive(job.Id, account.SiteId, targetKind, title, JobStatus.Pending);
+        _pending.Enqueue(new WorkItem(job.Id, account.Id, account.SiteId, targetKind,
+            null, account.ScreenName ?? "me", account.RestId, title, baseDirectory, siteOptions, cookieAbs, archive, url));
         EnsureWorkers();
         return job.Id;
     }
@@ -189,11 +234,7 @@ public sealed class DownloadQueueService(
         try
         {
             var provider = sites.Get(item.SiteId);
-            var target = item.Kind switch
-            {
-                TargetKind.UserMedia => new UserTarget(item.UserId, item.TargetScreenName, item.BaseDirectory),
-                _ => new UserTarget(null, item.TargetScreenName, item.BaseDirectory),
-            };
+            var target = new UserTarget(item.UserId, item.TargetScreenName, item.BaseDirectory, item.TargetRestId, item.DirectUrl);
             var plan = provider.BuildDownload((ContentKind)item.Kind, target, item.SiteOptions,
                 new DownloadPaths(item.CookieAbsolutePath, item.ArchiveFile));
 
@@ -344,9 +385,12 @@ public sealed class DownloadQueueService(
         return snapshot;
     }
 
-    private void AddActive(long jobId, string siteId, TargetKind kind, string title, JobStatus status)
+    private void AddActive(long jobId, string siteId, TargetKind kind, string title, JobStatus status, long? userId = null)
     {
-        JobSnapshot snapshot = new(jobId, siteId, kind, title, status, 0, 0, 0, 0, null, null);
+        var kindLabel = sites.IsRegistered(siteId)
+            ? sites.Get(siteId).KindLabel((ContentKind)kind)
+            : kind.ToString();
+        JobSnapshot snapshot = new(jobId, siteId, kind, title, status, 0, 0, 0, 0, null, null, kindLabel, userId);
         lock (_gate) _active[jobId] = snapshot;
         JobChanged?.Invoke(snapshot);
     }

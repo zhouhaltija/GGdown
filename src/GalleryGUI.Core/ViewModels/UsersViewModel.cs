@@ -18,6 +18,7 @@ namespace GalleryGUI.ViewModels;
 public sealed partial class UserRowViewModel : ObservableObject
 {
     private bool _isSelected;
+    private bool _isDownloading;
 
     public UserRowViewModel(
         User model,
@@ -26,37 +27,81 @@ public sealed partial class UserRowViewModel : ObservableObject
         Action<UserRowViewModel> toggleSkip,
         Action<UserRowViewModel> openProfile,
         Func<UserRowViewModel, Task> openFolder,
-        Func<UserRowViewModel, Task> deleteOne)
+        Func<UserRowViewModel, Task> deleteOne,
+        Func<UserRowViewModel, Task>? downloadHighlights = null,
+        bool supportsHighlights = false)
     {
         Model = model;
+        SupportsHighlights = supportsHighlights;
         DownloadCommand = new AsyncRelayCommand(() => downloadOne(this));
         TogglePinCommand = new RelayCommand(() => togglePin(this));
         ToggleSkipCommand = new RelayCommand(() => toggleSkip(this));
         OpenProfileCommand = new AsyncRelayCommand(() => { openProfile(this); return Task.CompletedTask; });
         OpenFolderCommand = new AsyncRelayCommand(() => openFolder(this));
         DeleteCommand = new AsyncRelayCommand(() => deleteOne(this));
+        DownloadHighlightsCommand = new AsyncRelayCommand(
+            () => downloadHighlights?.Invoke(this) ?? Task.CompletedTask,
+            () => supportsHighlights && CanDownload);
     }
 
     public User Model { get; }
     public bool IsSelected { get => _isSelected; set { if (SetProperty(ref _isSelected, value)) SelectedChanged?.Invoke(); } }
     public event Action? SelectedChanged;
 
+    public bool IsDownloading
+    {
+        get => _isDownloading;
+        set
+        {
+            if (!SetProperty(ref _isDownloading, value)) return;
+            OnPropertyChanged(nameof(CanDownload));
+            OnPropertyChanged(nameof(DownloadButtonText));
+            OnPropertyChanged(nameof(Subtitle));
+            DownloadHighlightsCommand.NotifyCanExecuteChanged();
+        }
+    }
+
     public string Title => string.IsNullOrWhiteSpace(Model.DisplayName) ? Model.ScreenName : Model.DisplayName!;
-    public string Subtitle => Model.IsSkipped
-        ? $"@{Model.ScreenName} · {SourceText} · 已暂停"
-        : $"@{Model.ScreenName} · {SourceText}";
+    public string Subtitle
+    {
+        get
+        {
+            var extra = IsDownloading ? " · 下载中" : Model.IsSkipped ? " · 已暂停" : "";
+            return $"@{Model.ScreenName} · {SourceText}{extra}";
+        }
+    }
     public string DownloadCountText => Model.DownloadCount.ToString();
     public string LastDownloadText => Model.LastDownloadAt is { } t
         ? t.ToLocalTime().ToString("yyyy-MM-dd HH:mm")
         : "—";
     public bool IsPinned => Model.IsPinned;
     public bool IsSkipped => Model.IsSkipped;
-    public bool CanDownload => !Model.IsSkipped;
+    public bool CanDownload => !Model.IsSkipped && !IsDownloading;
+    public string DownloadButtonText => IsDownloading ? "下载中" : "下载";
     public string PinButtonText => Model.IsPinned ? "取消置顶" : "置顶";
     public string SkipButtonText => Model.IsSkipped ? "恢复" : "暂停";
     public string? AvatarUrl => Model.AvatarUrl;
+    public string? BannerUrl => Model.BannerUrl;
+    public string? Bio => Model.Bio;
+    public bool SupportsHighlights { get; }
+    public bool ShowHighlights => SupportsHighlights;
+    public long NewMediaCount
+    {
+        get
+        {
+            if (Model.MediaCount is not long current) return 0;
+            var baseline = Model.MediaCountAtDownload ?? current;
+            return Math.Max(0, current - baseline);
+        }
+    }
+    public bool HasNewMedia => NewMediaCount > 0;
+    public string NewMediaText => HasNewMedia ? $"新 +{NewMediaCount}" : "";
+    public string FollowersText => Model.FollowersCount is long n
+        ? n >= 10_000 ? $"{n / 10_000.0:F1}万 关注者" : $"{n} 关注者"
+        : "";
 
     public IAsyncRelayCommand DownloadCommand { get; }
+    public IAsyncRelayCommand DownloadHighlightsCommand { get; }
     public IRelayCommand OpenProfileCommand { get; }
     public IAsyncRelayCommand OpenFolderCommand { get; }
     public IRelayCommand TogglePinCommand { get; }
@@ -128,8 +173,14 @@ public partial class UsersViewModel : ObservableObject
         ShowAddUserCommand = new RelayCommand(() => ShowAddUserRequested?.Invoke());
         ShowImportCookieCommand = new RelayCommand(() => ShowImportCookieRequested?.Invoke());
         ShowFollowingListCommand = new RelayCommand(() => ShowFollowingListRequested?.Invoke(), () => _hasAccount && _currentSite.IsAvailable);
+        SelectAllCommand = new RelayCommand(() => SelectAll(true));
+        DeselectAllCommand = new RelayCommand(() => SelectAll(false));
+        InvertSelectionCommand = new RelayCommand(InvertSelection);
+        RefreshProfilesCommand = new AsyncRelayCommand(RefreshProfilesAsync);
 
         _queue.AccountInvalid += OnAccountInvalid;
+        _queue.JobChanged += OnJobSnapshot;
+        _queue.JobRemoved += OnJobSnapshot;
     }
 
     public ObservableCollection<UserRowViewModel> Users { get; }
@@ -144,7 +195,7 @@ public partial class UsersViewModel : ObservableObject
     public bool ShowEmptyGuide => _currentSite.IsAvailable && !_hasUsers;
     public bool ShowUserList => _currentSite.IsAvailable;
     public string SiteDisplayName => _currentSite.Current.DisplayName;
-    public string ComingSoonMessage => $"{_currentSite.Current.DisplayName} 即将支持，目前仅 X (Twitter) 可下载。";
+    public string ComingSoonMessage => $"{_currentSite.Current.DisplayName} 即将支持，该站点尚未开放下载。";
     public string SelectedCountText => $"已选 {SelectedCount} 个";
 
     [ObservableProperty]
@@ -173,6 +224,10 @@ public partial class UsersViewModel : ObservableObject
     public IRelayCommand ShowAddUserCommand { get; }
     public IRelayCommand ShowImportCookieCommand { get; }
     public IRelayCommand ShowFollowingListCommand { get; }
+    public IRelayCommand SelectAllCommand { get; }
+    public IRelayCommand DeselectAllCommand { get; }
+    public IRelayCommand InvertSelectionCommand { get; }
+    public IAsyncRelayCommand RefreshProfilesCommand { get; }
 
     // brief Step 4 XAML 绑定 ShowAddUserCommand/ShowImportCookieCommand（Produces 契约之外的占位命令，
     // "直接调 VM 内部占位命令——B4 接线"），命令转发为事件，页面订阅后转对话框。
@@ -210,6 +265,13 @@ public partial class UsersViewModel : ObservableObject
                 row.IsSelected = selected;
         });
 
+    public void InvertSelection()
+        => _dispatcher.Post(() =>
+        {
+            foreach (var row in Users)
+                row.IsSelected = !row.IsSelected;
+        });
+
     private async Task RefreshAsync()
     {
         try
@@ -242,6 +304,7 @@ public partial class UsersViewModel : ObservableObject
                 OnPropertyChanged(nameof(ComingSoonMessage));
                 ShowFollowingListCommand.NotifyCanExecuteChanged();
                 NotifySelection();
+                ApplyDownloadingState();
             });
         }
         // 覆盖防抖/页面 OnNavigatedTo/OnAccountInvalid/命令四个入口：坏库等异常落 StatusMessage 不崩线程
@@ -257,13 +320,17 @@ public partial class UsersViewModel : ObservableObject
 
     private UserRowViewModel CreateRow(User user)
     {
+        var supportsHighlights = _sites.IsRegistered(SiteId)
+            && _sites.Get(SiteId).SupportedKinds.Contains(ContentKind.UserHighlights);
         var row = new UserRowViewModel(user,
             downloadOne: DownloadOneAsync,
             togglePin: u => _ = TogglePinCoreAsync(u),
             toggleSkip: u => _ = ToggleSkipCoreAsync(u),
             openProfile: OpenProfileCore,
             openFolder: OpenFolderCoreAsync,
-            deleteOne: DeleteOneAsync);
+            deleteOne: DeleteOneAsync,
+            downloadHighlights: DownloadHighlightsAsync,
+            supportsHighlights: supportsHighlights);
         row.SelectedChanged += OnRowSelectionChanged;
         return row;
     }
@@ -283,24 +350,38 @@ public partial class UsersViewModel : ObservableObject
     {
         var users = Users.Where(r => r.IsSelected).Select(r => r.Model).ToList();
         if (users.Count == 0) return;
-        await DownloadUsersAsync(users);
+        if (await DownloadUsersAsync(users))
+            SelectAll(false);
     }
 
     private Task DownloadOneAsync(UserRowViewModel row) => DownloadUsersAsync([row.Model]);
 
-    private async Task DownloadUsersAsync(IReadOnlyList<User> users)
+    private Task DownloadHighlightsAsync(UserRowViewModel row) => DownloadUsersAsync([row.Model], ContentKind.UserHighlights);
+
+    /// <returns>true：入队完成或全部被跳过（可清选中）；false：硬失败，保留勾选以便重试。</returns>
+    private async Task<bool> DownloadUsersAsync(IReadOnlyList<User> users, ContentKind? onlyKind = null)
     {
         if (!_currentSite.IsAvailable)
         {
             StatusMessage = ComingSoonMessage;
-            return;
+            return false;
         }
-        var skipped = users.Count(u => u.IsSkipped);
-        var toDownload = users.Where(u => !u.IsSkipped).ToList();
+        var downloadingIds = DownloadingUserIds();
+        var skippedPaused = users.Count(u => u.IsSkipped);
+        var skippedDownloading = users.Count(u => !u.IsSkipped && downloadingIds.Contains(u.Id));
+        var toDownload = users.Where(u => !u.IsSkipped && !downloadingIds.Contains(u.Id)).ToList();
         if (toDownload.Count == 0)
         {
-            StatusMessage = users.Count == 1 ? "该用户已暂停下载" : "选中用户均已暂停下载";
-            return;
+            StatusMessage = users.Count == 1
+                ? downloadingIds.Contains(users[0].Id) && !users[0].IsSkipped
+                    ? "该用户已在下载队列"
+                    : "该用户已暂停下载"
+                : skippedDownloading > 0 && skippedPaused == 0
+                    ? "选中用户均在下载队列中"
+                    : skippedDownloading > 0
+                        ? "选中用户均已暂停或已在下载队列"
+                        : "选中用户均已暂停下载";
+            return true;
         }
 
         Account? account;
@@ -312,25 +393,51 @@ public partial class UsersViewModel : ObservableObject
         catch (Exception ex)
         {
             StatusMessage = $"账号状态获取失败：{ex.Message}";
-            return;
+            return false;
         }
         if (account is null)
         {
             StatusMessage = "请先在设置中导入 Cookie";
-            return;
+            return false;
         }
         try
         {
             var dir = await _settings.GetDownloadDirectoryAsync();
             var siteOptions = await _settings.GetSiteOptionsAsync(SiteId);
-            await _queue.EnqueueUserMediaAsync(account, toDownload, dir, siteOptions);
-            StatusMessage = skipped > 0
-                ? $"已加入下载队列（{toDownload.Count} 个用户，暂停 {skipped} 个）"
-                : $"已加入下载队列（{toDownload.Count} 个用户）";
+            var provider = _sites.IsRegistered(SiteId) ? _sites.Get(SiteId) : null;
+            if (onlyKind is ContentKind.UserHighlights)
+            {
+                await _queue.EnqueueUserContentAsync(account, toDownload, ContentKind.UserHighlights, dir, siteOptions);
+                StatusMessage = $"已加入高光队列（{toDownload.Count} 个用户）";
+                return true;
+            }
+            var enqueueArtworks = provider is null
+                || !provider.SupportedKinds.Contains(ContentKind.UserNovels)
+                || OptionBool(siteOptions, "download_artworks", true);
+            var enqueueNovels = provider is not null
+                && provider.SupportedKinds.Contains(ContentKind.UserNovels)
+                && OptionBool(siteOptions, "download_novels", true);
+            if (!enqueueArtworks && !enqueueNovels)
+            {
+                StatusMessage = "请在设置中至少启用一种作品类型";
+                return false;
+            }
+            if (enqueueArtworks)
+                await _queue.EnqueueUserMediaAsync(account, toDownload, dir, siteOptions);
+            if (enqueueNovels)
+                await _queue.EnqueueUserContentAsync(account, toDownload, ContentKind.UserNovels, dir, siteOptions);
+            var extras = new List<string>();
+            if (skippedPaused > 0) extras.Add($"暂停 {skippedPaused} 个");
+            if (skippedDownloading > 0) extras.Add($"跳过 {skippedDownloading} 个下载中");
+            StatusMessage = extras.Count == 0
+                ? $"已加入下载队列（{toDownload.Count} 个用户）"
+                : $"已加入下载队列（{toDownload.Count} 个用户，{string.Join("，", extras)}）";
+            return true;
         }
         catch (Exception ex) // EngineException 等
         {
             StatusMessage = ex.Message;
+            return false;
         }
     }
 
@@ -415,7 +522,7 @@ public partial class UsersViewModel : ObservableObject
         if (string.IsNullOrWhiteSpace(url))
         {
             if (!_sites.IsRegistered(SiteId)) return;
-            url = _sites.Get(SiteId).BuildProfileUrl(row.Model.ScreenName);
+            url = _sites.Get(SiteId).BuildProfileUrl(row.Model.ScreenName, row.Model.RestId);
         }
         Process.Start(new ProcessStartInfo(url) { UseShellExecute = true });
     }
@@ -471,8 +578,45 @@ public partial class UsersViewModel : ObservableObject
         }
     }
 
+    private async Task RefreshProfilesAsync()
+    {
+        try
+        {
+            var account = await _accountQuery.GetActiveAsync(SiteId);
+            if (account is null)
+            {
+                StatusMessage = "请先在设置中导入 Cookie";
+                return;
+            }
+            var selected = Users.Where(r => r.IsSelected).Select(r => r.Model.Id).ToList();
+            var n = await _users.RefreshProfilesAsync(account, selected.Count > 0 ? selected : null);
+            StatusMessage = $"已刷新 {n} 个用户资料";
+            await RefreshAsync();
+        }
+        catch (Exception ex)
+        {
+            StatusMessage = $"刷新资料失败：{ex.Message}";
+        }
+    }
+
     private static void OpenExplorerFolder(string path)
         => Process.Start(new ProcessStartInfo { FileName = "explorer.exe", ArgumentList = { path } });
+
+    private void OnJobSnapshot(JobSnapshot snapshot)
+        => _dispatcher.Post(ApplyDownloadingState);
+
+    private HashSet<long> DownloadingUserIds()
+        => _queue.Active
+            .Where(j => j.UserId is not null && j.Status is JobStatus.Pending or JobStatus.Running)
+            .Select(j => j.UserId!.Value)
+            .ToHashSet();
+
+    private void ApplyDownloadingState()
+    {
+        var downloading = DownloadingUserIds();
+        foreach (var row in Users)
+            row.IsDownloading = downloading.Contains(row.Model.Id);
+    }
 
     private void OnAccountInvalid(long accountId, string reason)
         => _dispatcher.Post(async () =>
@@ -487,4 +631,7 @@ public partial class UsersViewModel : ObservableObject
                 StatusMessage = ex.Message;
             }
         });
+
+    private static bool OptionBool(IReadOnlyDictionary<string, object?> options, string key, bool fallback)
+        => options.TryGetValue(key, out var v) && v is bool b ? b : fallback;
 }

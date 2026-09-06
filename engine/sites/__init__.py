@@ -98,6 +98,18 @@ def apply_proxy_from_env():
     config.set(("downloader", "http"), "proxy", url)
 
 
+def load_site(name):
+    """按 --site 懒加载站点模块。未知站点抛 ValueError。"""
+    key = (name or "").strip().lower()
+    if key == "twitter":
+        from sites import twitter
+        return twitter
+    if key == "pixiv":
+        from sites import pixiv
+        return pixiv
+    raise ValueError(f"unknown site: {name!r}")
+
+
 def parse_screen_name(value):
     """接受 裸用户名 / @user / x.com/user / twitter.com/user(/任意后缀)。"""
     v = (value or "").strip()

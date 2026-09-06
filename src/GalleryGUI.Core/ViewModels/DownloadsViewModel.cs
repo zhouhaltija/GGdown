@@ -59,12 +59,16 @@ public sealed partial class JobCardViewModel : ObservableObject
     public void Update(JobSnapshot snapshot)
     {
         Title = snapshot.Title;
-        KindBadge = snapshot.Kind switch // snapshot.Kind 是 Data.TargetKind（与 Sites.ContentKind 同名同序）
-        {
-            TargetKind.AccountLikes => "账号喜欢",
-            TargetKind.AccountBookmarks => "账号书签",
-            _ => "用户媒体", // TargetKind.UserMedia
-        };
+        KindBadge = !string.IsNullOrEmpty(snapshot.KindLabel)
+            ? snapshot.KindLabel
+            : snapshot.Kind switch
+            {
+                TargetKind.AccountLikes => "账号喜欢",
+                TargetKind.AccountBookmarks => "账号书签",
+                TargetKind.UserNovels => "小说",
+                TargetKind.AccountNovelBookmarks => "收藏小说",
+                _ => "用户媒体",
+            };
         // 控制器裁定 4：ProgressPercent = Total>0 ? (Done+Skipped+Failed)*100.0/Total : 0
         ProgressPercent = snapshot.Total > 0
             ? (snapshot.Done + snapshot.Skipped + snapshot.Failed) * 100.0 / snapshot.Total
@@ -85,7 +89,32 @@ public sealed partial class JobCardViewModel : ObservableObject
             _ => snapshot.Status.ToString(),
         };
         IsFinished = snapshot.Status is JobStatus.Completed or JobStatus.Canceled or JobStatus.Failed; // 终态（取消按钮随之隐藏，页面 UiConv 转换）
+        var file = snapshot.CurrentFile;
+        var ext = file is null ? "" : Path.GetExtension(file).ToLowerInvariant();
+        HasPreview = file is not null
+            && File.Exists(file)
+            && ext is ".jpg" or ".jpeg" or ".png" or ".gif" or ".webp" or ".bmp";
+        PreviewPath = HasPreview ? file : null;
     }
+
+    private string? _previewPath;
+    public string? PreviewPath { get => _previewPath; private set => SetProperty(ref _previewPath, value); }
+
+    private bool _hasPreview;
+    public bool HasPreview { get => _hasPreview; private set => SetProperty(ref _hasPreview, value); }
+}
+
+/// <summary>下载页账号内容按钮（喜欢/书签/收藏）。</summary>
+public sealed class AccountContentActionViewModel
+{
+    public AccountContentActionViewModel(string label, IAsyncRelayCommand command)
+    {
+        Label = label;
+        Command = command;
+    }
+
+    public string Label { get; }
+    public IAsyncRelayCommand Command { get; }
 }
 
 /// <summary>
@@ -94,27 +123,34 @@ public sealed partial class JobCardViewModel : ObservableObject
 /// </summary>
 public partial class DownloadsViewModel : ObservableObject
 {
+    private static readonly ContentKind[] AccountKinds =
+        [ContentKind.AccountLikes, ContentKind.AccountBookmarks, ContentKind.AccountNovelBookmarks];
+
     private readonly ICurrentSite _currentSite;
     private readonly IDownloadQueueService _queue;
     private readonly IAccountQueryService _accountQuery;
     private readonly IAppSettings _settings;
     private readonly IUiDispatcher _dispatcher;
+    private readonly SiteRegistry _sites;
     private bool _started; // NavigationCacheMode=Enabled 时 OnNavigatedTo 每次导航触发，Start/Stop 须对称
 
     private string SiteId => _currentSite.SiteId;
 
     public DownloadsViewModel(IDownloadQueueService queue, IAccountQueryService accountQuery,
-        IAppSettings settings, IUiDispatcher dispatcher, ICurrentSite currentSite)
+        IAppSettings settings, IUiDispatcher dispatcher, ICurrentSite currentSite, SiteRegistry sites)
     {
         _queue = queue;
         _accountQuery = accountQuery;
         _settings = settings;
         _dispatcher = dispatcher;
         _currentSite = currentSite;
+        _sites = sites;
         _currentSite.Changed += () => _dispatcher.Post(NotifySite);
 
         DownloadLikesCommand = new AsyncRelayCommand(() => DownloadAccountContentAsync(ContentKind.AccountLikes));
         DownloadBookmarksCommand = new AsyncRelayCommand(() => DownloadAccountContentAsync(ContentKind.AccountBookmarks));
+        SearchCommand = new AsyncRelayCommand(SearchAsync);
+        RebuildAccountActions();
     }
 
     public ObservableCollection<JobCardViewModel> Jobs { get; } = [];
@@ -128,24 +164,49 @@ public partial class DownloadsViewModel : ObservableObject
     [ObservableProperty]
     private string? _statusMessage;   // 操作结果反馈（成功/失败一行话）
 
+    [ObservableProperty]
+    private string? _searchQuery;
+
     public event Action? JobsChanged; // 页面无需订阅；供测试（任何 Jobs 变更后触发）
 
     public IAsyncRelayCommand DownloadLikesCommand { get; }
     public IAsyncRelayCommand DownloadBookmarksCommand { get; }
+    public IAsyncRelayCommand SearchCommand { get; }
+    public ObservableCollection<AccountContentActionViewModel> AccountActions { get; } = [];
 
     public bool IsSiteAvailable => _currentSite.IsAvailable;
-    public bool SupportsAccountContent => _currentSite.IsAvailable; // V1 仅 Twitter 有喜欢/书签
+    public bool SupportsAccountContent => _currentSite.IsAvailable && AccountActions.Count > 0;
+    public bool SupportsSearch => _currentSite.IsAvailable && _sites.IsRegistered(SiteId)
+        && _sites.Get(SiteId).SupportedKinds.Contains(ContentKind.Search);
     public bool ShowComingSoon => !_currentSite.IsAvailable;
-    public string ComingSoonMessage => $"{_currentSite.Current.DisplayName} 即将支持，目前仅 X (Twitter) 可下载。";
+    public string ComingSoonMessage => $"{_currentSite.Current.DisplayName} 即将支持，该站点尚未开放下载。";
 
     private void NotifySite()
     {
         OnPropertyChanged(nameof(IsSiteAvailable));
         OnPropertyChanged(nameof(SupportsAccountContent));
+        OnPropertyChanged(nameof(SupportsSearch));
         OnPropertyChanged(nameof(ShowComingSoon));
         OnPropertyChanged(nameof(ComingSoonMessage));
+        RebuildAccountActions();
         RebuildVisibleJobs();
         _ = RefreshHasAccountAsync();
+    }
+
+    private void RebuildAccountActions()
+    {
+        AccountActions.Clear();
+        if (!_currentSite.IsAvailable || !_sites.IsRegistered(SiteId)) return;
+        var provider = _sites.Get(SiteId);
+        foreach (var kind in AccountKinds)
+        {
+            if (!provider.SupportedKinds.Contains(kind)) continue;
+            var captured = kind;
+            AccountActions.Add(new AccountContentActionViewModel(
+                provider.KindLabel(captured),
+                new AsyncRelayCommand(() => DownloadAccountContentAsync(captured))));
+        }
+        OnPropertyChanged(nameof(SupportsAccountContent));
     }
 
     /// <summary>
@@ -241,6 +302,65 @@ public partial class DownloadsViewModel : ObservableObject
         catch (Exception ex)
         {
             StatusMessage = $"取消失败：{ex.Message}";
+        }
+    }
+
+    private async Task SearchAsync()
+    {
+        if (!SupportsSearch)
+        {
+            StatusMessage = ComingSoonMessage;
+            return;
+        }
+        var q = SearchQuery?.Trim();
+        if (string.IsNullOrEmpty(q))
+        {
+            StatusMessage = "请输入搜索内容或链接";
+            return;
+        }
+        Account? account;
+        try { account = await _accountQuery.GetActiveAsync(SiteId); }
+        catch (Exception ex)
+        {
+            StatusMessage = $"账号状态获取失败：{ex.Message}";
+            return;
+        }
+        if (account is null)
+        {
+            StatusMessage = "请先在设置中导入 Cookie";
+            return;
+        }
+        try
+        {
+            var provider = _sites.Get(SiteId);
+            var parsed = provider.ParseInput(q);
+            string url;
+            string title;
+            var kind = ContentKind.Search;
+            if (parsed.Ok && parsed.DirectUrl is not null && parsed.Kind is not PasteKind.User)
+            {
+                url = parsed.DirectUrl;
+                kind = parsed.Kind == PasteKind.Search ? ContentKind.Search : ContentKind.Permalink;
+                title = parsed.Kind switch
+                {
+                    PasteKind.Tweet => $"推文 {parsed.RestId}",
+                    PasteKind.List => $"列表 {parsed.RestId}",
+                    _ => "搜索",
+                };
+            }
+            else
+            {
+                url = "https://x.com/search?q=" + Uri.EscapeDataString(q);
+                title = q.Length > 24 ? "搜索 " + q[..24] + "…" : "搜索 " + q;
+            }
+            var dir = await _settings.GetDownloadDirectoryAsync();
+            var siteOptions = await _settings.GetSiteOptionsAsync(SiteId);
+            await _queue.EnqueuePermalinkAsync(account, url, title, kind, dir, siteOptions);
+            StatusMessage = $"已加入下载队列：{title}";
+        }
+        catch (Exception ex)
+        {
+            StatusMessage = ex.Message;
         }
     }
 

@@ -53,7 +53,7 @@ public class DownloadsViewModelTests : IDisposable
 
     private DownloadsViewModel CreateVm(ICurrentSite site) =>
         new(_queue, new AccountQueryService(_factory), new AppSettings(_factory, new SiteRegistry([new TwitterSiteProvider()])),
-            new SyncDispatcher(), site);
+            new SyncDispatcher(), site, new SiteRegistry([new TwitterSiteProvider()]));
 
     public void Dispose()
     {
@@ -201,7 +201,7 @@ public class DownloadsViewModelTests : IDisposable
         await site.SelectAsync("pixiv");
         Assert.Empty(vm.Jobs);
         Assert.False(vm.HasActive);
-        Assert.True(vm.ShowComingSoon);
+        Assert.False(vm.ShowComingSoon);
         Assert.Single(_queue.Active); // 后台仍在跑，只是 UI 不展示
 
         await site.SelectAsync("twitter");
@@ -234,6 +234,22 @@ public class DownloadsViewModelTests : IDisposable
         await WaitUntil(() => _vm.Jobs.Count == 0);
         Assert.False(_vm.HasActive);
         Assert.DoesNotContain(_vm.Jobs, c => c.JobId == jobId);
+    }
+
+    [Fact]
+    public async Task Search_enqueues_permalink_job()
+    {
+        var gate = new TaskCompletionSource();
+        _engine.OnDownload = async (_, _, _, ct) => await gate.Task.WaitAsync(ct);
+        await WaitUntil(() => _vm.HasAccount);
+        Assert.True(_vm.SupportsSearch);
+        _vm.SearchQuery = "from:alice filter:media";
+        await _vm.SearchCommand.ExecuteAsync(null);
+        Assert.Contains("已加入下载队列", _vm.StatusMessage);
+        Assert.Contains(_queue.Active, j => j.Kind == TargetKind.Search);
+        gate.SetResult();
+        await WaitUntil(() => _queue.Active.Count == 0);
+        Assert.Contains(_db.Jobs.AsNoTracking(), j => j.TargetKind == TargetKind.Search);
     }
 
     // 修复波 B5 flaky 处置：隔离复跑 3/3 通过、全量负载下偶发 5s 超时（累计 3 次）——负载敏感而非回归，

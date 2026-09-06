@@ -1,5 +1,6 @@
 using CommunityToolkit.Mvvm.ComponentModel;
 using GalleryGUI.Services;
+using GalleryGUI.Settings;
 using GalleryGUI.Sites;
 using GalleryGUI.Threading;
 
@@ -17,18 +18,22 @@ public partial class ImportViewModel : ObservableObject
     private readonly IAccountService _accounts;
     private readonly IUserService _users;
     private readonly IAccountQueryService _accountQuery;
+    private readonly IDownloadQueueService _queue;
+    private readonly IAppSettings _settings;
     private readonly IUiDispatcher _dispatcher;
     private readonly SiteRegistry _sites;
 
     private string SiteId => _currentSite.SiteId;
 
     public ImportViewModel(IAccountService accounts, IUserService users,
-        IAccountQueryService accountQuery, IUiDispatcher dispatcher, SiteRegistry sites,
-        ICurrentSite currentSite)
+        IAccountQueryService accountQuery, IDownloadQueueService queue, IAppSettings settings,
+        IUiDispatcher dispatcher, SiteRegistry sites, ICurrentSite currentSite)
     {
         _accounts = accounts;
         _users = users;
         _accountQuery = accountQuery;
+        _queue = queue;
+        _settings = settings;
         _dispatcher = dispatcher;
         _sites = sites;
         _currentSite = currentSite;
@@ -49,7 +54,13 @@ public partial class ImportViewModel : ObservableObject
     /// <summary>任一导入成功 → 页面通知 UsersViewModel.Refresh（经 dispatcher 投递，保证订阅者在 UI 线程）。</summary>
     public event Action? ImportCompleted;
 
-    /// <summary>输入即时校验（ParseInput）；UserInput 变更时自动触发（等价 brief 的"每次 TextChanged 调用"）。</summary>
+    public bool RequiresRefreshToken =>
+        _currentSite.IsAvailable && _sites.IsRegistered(SiteId) && _sites.Get(SiteId).RequiresRefreshToken;
+
+    public string InputHint =>
+        _currentSite.IsAvailable && _sites.IsRegistered(SiteId)
+            ? _sites.Get(SiteId).InputHint
+            : "用户名或主页链接";
     public void ValidateUserInput()
     {
         if (!_currentSite.IsAvailable || !_sites.IsRegistered(SiteId))
@@ -77,6 +88,23 @@ public partial class ImportViewModel : ObservableObject
         try
         {
             IsBusy = true;
+            var parsed = _sites.Get(SiteId).ParseInput(UserInput!.Trim());
+            if (parsed.Kind is PasteKind.Tweet or PasteKind.List or PasteKind.Search)
+            {
+                var dir = await _settings.GetDownloadDirectoryAsync(ct);
+                var siteOptions = await _settings.GetSiteOptionsAsync(SiteId, ct);
+                var kind = parsed.Kind == PasteKind.Search ? ContentKind.Search : ContentKind.Permalink;
+                var title = parsed.Kind switch
+                {
+                    PasteKind.Tweet => $"推文 {parsed.RestId}",
+                    PasteKind.List => $"列表 {parsed.RestId}",
+                    _ => "搜索",
+                };
+                await _queue.EnqueuePermalinkAsync(account, parsed.DirectUrl!, title, kind, dir, siteOptions, ct);
+                ResultMessage = $"已加入下载队列：{title}";
+                OnImportSucceeded();
+                return true;
+            }
             var user = await _users.AddUserAsync(account, UserInput!.Trim(), ct);
             ResultMessage = $"已添加用户 @{user.ScreenName}";
             OnImportSucceeded();
@@ -90,12 +118,13 @@ public partial class ImportViewModel : ObservableObject
         finally { IsBusy = false; }
     }
 
-    public async Task<bool> ImportCookiesAsync(string cookiesFilePath, CancellationToken ct = default)
+    public async Task<bool> ImportCookiesAsync(string cookiesFilePath, string? refreshToken = null,
+        CancellationToken ct = default)
     {
         try
         {
             IsBusy = true;
-            var result = await _accounts.ImportCookiesAsync(SiteId, cookiesFilePath, ct);
+            var result = await _accounts.ImportCookiesAsync(SiteId, cookiesFilePath, refreshToken, ct);
             if (!result.Ok)
             {
                 ResultMessage = result.Error; // "Cookie 无效或已过期，请重新导出"（AccountService.VerifyAsync）

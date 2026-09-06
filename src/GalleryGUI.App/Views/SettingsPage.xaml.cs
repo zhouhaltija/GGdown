@@ -75,9 +75,10 @@ public sealed partial class SettingsPage : Page
     {
         try
         {
-            var dialog = new ImportCookieDialog(_files) { XamlRoot = App.Current.MainWindow.DialogXamlRoot };
+            var dialog = new ImportCookieDialog(_files, Vm.RequiresRefreshToken) { XamlRoot = App.Current.MainWindow.DialogXamlRoot };
             if (await dialog.ShowAsync() != ContentDialogResult.Primary || dialog.CookiesPath is null) return;
             Vm.PendingCookieFile = dialog.CookiesPath;
+            Vm.PendingRefreshToken = dialog.RefreshToken;
             await Vm.ImportCookieCommand.ExecuteAsync(null);
         }
         catch (Exception ex)

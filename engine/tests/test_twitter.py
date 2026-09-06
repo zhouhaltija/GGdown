@@ -16,6 +16,10 @@ def test_map_transformed_fields():
         "screen_name": "elonmusk",
         "display_name": "Elon Musk",
         "avatar_url": "https://pbs.twimg.com/profile/a.jpg",
+        "banner_url": None,
+        "bio": None,
+        "followers_count": None,
+        "media_count": None,
     }
 
 
@@ -45,7 +49,9 @@ def test_whoami_uses_twid_and_user_by_rest_id(monkeypatch):
             return {"rest_id": "99", "core": {"screen_name": "alice", "name": "Alice"}}
 
     monkeypatch.setattr("sites.twitter.make_api", lambda _path: (Api(), Ext()))
-    assert whoami("cookies.txt") == {"screen_name": "alice", "display_name": "Alice"}
+    assert whoami("cookies.txt") == {
+        "screen_name": "alice", "display_name": "Alice", "rest_id": "99",
+    }
 
 
 def test_whoami_missing_auth_token_is_auth_error(monkeypatch):

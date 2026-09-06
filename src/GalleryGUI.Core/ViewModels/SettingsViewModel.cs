@@ -24,6 +24,7 @@ public sealed partial class OptionItemViewModel : ObservableObject
         Key = field.Key;
         DisplayName = field.DisplayName;
         Kind = field.Kind;
+        Choices = field.Choices ?? [];
         // 当前值缺失/类型不符回退 Schema 默认值（GetSiteOptionsAsync 只回保存过的键）
         _boolValue = value as bool? ?? (field.Default as bool? ?? false);
         _textValue = value?.ToString() ?? field.Default?.ToString() ?? "";
@@ -32,6 +33,7 @@ public sealed partial class OptionItemViewModel : ObservableObject
     public string Key { get; }
     public string DisplayName { get; }
     public OptionKind Kind { get; }
+    public IReadOnlyList<string> Choices { get; }
 
     private bool _boolValue;
     public bool BoolValue { get => _boolValue; set => SetProperty(ref _boolValue, value); }
@@ -39,9 +41,9 @@ public sealed partial class OptionItemViewModel : ObservableObject
     private string _textValue = "";
     public string TextValue { get => _textValue; set => SetProperty(ref _textValue, value); }
 
-    // 页面渲染开关：Boolean→ToggleSwitch，Text/Choice→TextBox（V1 无 Choice 字段，TextBox 兜底）
     public bool IsBoolean => Kind == OptionKind.Boolean;
-    public bool IsText => Kind != OptionKind.Boolean;
+    public bool IsText => Kind == OptionKind.Text;
+    public bool IsChoice => Kind == OptionKind.Choice;
 
     /// <summary>按 Kind 回读当前值（bool/string，与 DefaultOptions 值类型对齐）。</summary>
     public object? ToValue() => Kind switch
@@ -136,7 +138,7 @@ public partial class SettingsViewModel : ObservableObject
     public string SiteDisplayName => _currentSite.Current.DisplayName;
     public string AccountSiteHeader => $"{_currentSite.Current.DisplayName} 账号";
     public string OptionsHeader => $"站点选项 · {_currentSite.Current.DisplayName}";
-    public string ComingSoonMessage => $"{_currentSite.Current.DisplayName} 即将支持，目前仅 X (Twitter) 可导入账号与站点选项。";
+    public string ComingSoonMessage => $"{_currentSite.Current.DisplayName} 即将支持，该站点尚未开放导入账号与站点选项。";
 
     public bool HasAccount => ActiveAccount is not null;
     public bool ShowAccountImport => IsSiteAvailable && !HasAccount;
@@ -154,8 +156,14 @@ public partial class SettingsViewModel : ObservableObject
         _ => "",
     };
 
+    public bool RequiresRefreshToken =>
+        IsSiteAvailable && _sites.IsRegistered(SiteId) && _sites.Get(SiteId).RequiresRefreshToken;
+
     [ObservableProperty]
     private string? _pendingCookieFile;   // 对话框选择结果（页面赋值后执行 ImportCookieCommand）
+
+    [ObservableProperty]
+    private string? _pendingRefreshToken;
 
     public event Action? AccountChanged;  // 导入/验证后通知（页面刷新账号卡，裁定 8）
 
@@ -218,6 +226,7 @@ public partial class SettingsViewModel : ObservableObject
                 OnPropertyChanged(nameof(AccountSiteHeader));
                 OnPropertyChanged(nameof(OptionsHeader));
                 OnPropertyChanged(nameof(ComingSoonMessage));
+                OnPropertyChanged(nameof(RequiresRefreshToken));
             });
         }
         catch (Exception ex) // 坏库等异常不崩线程（B5 模式）
@@ -350,9 +359,10 @@ public partial class SettingsViewModel : ObservableObject
         if (string.IsNullOrEmpty(PendingCookieFile)) return;
         try
         {
-            var result = await _accounts.ImportCookiesAsync(SiteId, PendingCookieFile);
+            var result = await _accounts.ImportCookiesAsync(SiteId, PendingCookieFile, PendingRefreshToken);
             StatusMessage = result.Ok ? $"账号 @{result.Account.ScreenName} 导入成功" : (result.Error ?? "导入失败");
             PendingCookieFile = null;
+            PendingRefreshToken = null;
             SetActiveAccount(await _accountQuery.GetActiveAsync(SiteId)); // 新账号（含验证失败标记 Invalid 的情况）入卡
             AccountChanged?.Invoke();
         }

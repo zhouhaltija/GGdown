@@ -79,6 +79,9 @@ public class SettingsViewModelTests : IDisposable
             new OptionField("rate", OptionKind.Choice, "1", "速率", ["1", "2"]), "2");
         Assert.Equal("2", choiceItem.TextValue);
         Assert.Equal("2", choiceItem.ToValue());
+        Assert.True(choiceItem.IsChoice);
+        Assert.False(choiceItem.IsText);
+        Assert.Equal(["1", "2"], choiceItem.Choices);
     }
 
     // ---- ② 并发：保存后 GetConcurrencyAsync 一致、<1 钳制、同步 queue setter（裁定 4） ----
@@ -266,9 +269,9 @@ public class SettingsViewModelTests : IDisposable
     {
         private readonly FakeEngine _inner = new();
         public Task<EngineHello> HelloAsync(CancellationToken ct = default) => Task.FromException<EngineHello>(error);
-        public Task<AccountInfo> WhoAmIAsync(string cookiesFile, CancellationToken ct = default) => _inner.WhoAmIAsync(cookiesFile, ct);
-        public Task<IReadOnlyList<SiteUserInfo>> ListFollowingAsync(string cookiesFile, CancellationToken ct = default) => _inner.ListFollowingAsync(cookiesFile, ct);
-        public Task<SiteUserInfo> GetUserInfoAsync(string cookiesFile, string input, CancellationToken ct = default) => _inner.GetUserInfoAsync(cookiesFile, input, ct);
+        public Task<AccountInfo> WhoAmIAsync(string siteId, string cookiesFile, CancellationToken ct = default) => _inner.WhoAmIAsync(siteId, cookiesFile, ct);
+        public Task<IReadOnlyList<SiteUserInfo>> ListFollowingAsync(string siteId, string cookiesFile, CancellationToken ct = default) => _inner.ListFollowingAsync(siteId, cookiesFile, ct);
+        public Task<SiteUserInfo> GetUserInfoAsync(string siteId, string cookiesFile, string input, CancellationToken ct = default) => _inner.GetUserInfoAsync(siteId, cookiesFile, input, ct);
         public Task DownloadAsync(DownloadPlan plan, string cookiesFile, IProgress<EngineEvent> progress, CancellationToken ct = default) => _inner.DownloadAsync(plan, cookiesFile, progress, ct);
     }
 

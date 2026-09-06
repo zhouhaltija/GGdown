@@ -18,7 +18,7 @@ public static class SiteCatalog
     public static IReadOnlyList<SiteInfo> All { get; } =
     [
         new(TwitterId, "X (Twitter)", true),
-        new("pixiv", "Pixiv", false),
+        new("pixiv", "Pixiv", true),
         new("fanbox", "pixivFANBOX", false),
         new("danbooru", "Danbooru", false),
         new("gelbooru", "Gelbooru", false),

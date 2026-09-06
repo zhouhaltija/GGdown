@@ -90,6 +90,20 @@ public class HistoryViewModelTests : IDisposable
         Assert.False(likes.HasSourceUrl);
         Assert.Equal("—", likes.SizeText);                           // 无大小
         Assert.Equal("失败", likes.StatusText);
+        Assert.True(alice.IsImage);
+        Assert.False(alice.IsVideo);
+        Assert.True(bob.IsVideo);
+        Assert.False(bob.IsImage);
+    }
+
+    [Fact]
+    public void ToggleGallery_flips_view_mode()
+    {
+        Assert.True(_vm.IsGallery);
+        Assert.Equal("列表", _vm.GalleryToggleText);
+        _vm.ToggleGalleryCommand.Execute(null);
+        Assert.False(_vm.IsGallery);
+        Assert.Equal("画廊", _vm.GalleryToggleText);
     }
 
     // SizeText 全量级：B/KB/MB/GB（F1 一位小数）与 null 占位

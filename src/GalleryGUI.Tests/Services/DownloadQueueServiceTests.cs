@@ -76,6 +76,35 @@ public class DownloadQueueServiceTests : IDisposable
     }
 
     [Fact]
+    public async Task Enqueue_permalink_runs_direct_url()
+    {
+        var gate = new TaskCompletionSource();
+        _engine.OnDownload = async (_, _, _, ct) => await gate.Task.WaitAsync(ct);
+        var jobId = await _queue.EnqueuePermalinkAsync(_account, "https://x.com/alice/status/9", "推文 9",
+            ContentKind.Permalink, @"D:\dl", Opts());
+        await WaitUntil(() => _queue.Active.Count == 1);
+        Assert.Equal("推文 9", _queue.Active[0].Title);
+        Assert.Null(_queue.Active[0].UserId);
+        gate.SetResult();
+        await WaitUntil(() => _queue.Active.Count == 0);
+        Assert.Equal(jobId, _db.Jobs.Single().Id);
+        Assert.Equal(TargetKind.Permalink, _db.Jobs.Single().TargetKind);
+        Assert.Equal(["https://x.com/alice/status/9"], _engine.Downloads.Single().Plan.Urls);
+    }
+
+    [Fact]
+    public async Task Enqueue_user_snapshot_includes_user_id()
+    {
+        var gate = new TaskCompletionSource();
+        _engine.OnDownload = async (_, _, _, ct) => await gate.Task.WaitAsync(ct);
+        await _queue.EnqueueUserMediaAsync(_account, [_alice], @"D:\dl", Opts());
+        await WaitUntil(() => _queue.Active.Count == 1);
+        Assert.Equal(_alice.Id, _queue.Active[0].UserId);
+        gate.SetResult();
+        await WaitUntil(() => _queue.Active.Count == 0);
+    }
+
+    [Fact]
     public async Task Enqueue_multiple_users_returns_first_job_id()
     {
         // 审查 Important-1 回归覆盖：接口契约"每用户一个 DownloadJob 行，返回首个 jobId"
@@ -200,6 +229,61 @@ public class DownloadQueueServiceTests : IDisposable
 
         await _queue.RecoverOnStartupAsync();
         Assert.All(_db.Jobs.AsNoTracking().ToList(), j => Assert.Equal(JobStatus.Failed, j.Status));
+    }
+
+    [Fact]
+    public async Task Enqueue_pixiv_novels_uses_numeric_id_url()
+    {
+        var pixivAccount = new Account
+        {
+            SiteId = "pixiv", CookiePath = "pixiv\\c\\cookies.txt", RestId = "1",
+            ScreenName = "me", Status = AccountStatus.Ok, IsActive = true, AddedAt = DateTime.UtcNow,
+        };
+        var artist = new User
+        {
+            SiteId = "pixiv", RestId = "12345", ScreenName = "foo_bar", DisplayName = "Foo",
+            Source = UserSource.Following, AddedAt = DateTime.UtcNow, UpdatedAt = DateTime.UtcNow,
+        };
+        _db.Accounts.Add(pixivAccount);
+        _db.Users.Add(artist);
+        await _db.SaveChangesAsync();
+        var queue = new DownloadQueueService(new SingleDbContextFactory(_db), _engine, _stats, _paths,
+            new SiteRegistry([new PixivSiteProvider()]),
+            NullLogger<DownloadQueueService>.Instance);
+
+        await queue.EnqueueUserContentAsync(pixivAccount, [artist], ContentKind.UserNovels, @"D:\dl",
+            new Dictionary<string, object?>());
+        await WaitUntil(() => queue.Active.Count == 0);
+
+        var plan = _engine.Downloads.Last().Plan;
+        Assert.Equal(["https://www.pixiv.net/users/12345/novels"], plan.Urls);
+        var job = _db.Jobs.AsNoTracking().OrderByDescending(j => j.Id).First();
+        Assert.Equal(TargetKind.UserNovels, job.TargetKind);
+    }
+
+    [Fact]
+    public async Task Enqueue_pixiv_bookmarks_include_private()
+    {
+        var pixivAccount = new Account
+        {
+            SiteId = "pixiv", CookiePath = "pixiv\\c\\cookies.txt", RestId = "99",
+            ScreenName = "me", Status = AccountStatus.Ok, IsActive = true, AddedAt = DateTime.UtcNow,
+        };
+        _db.Accounts.Add(pixivAccount);
+        await _db.SaveChangesAsync();
+        var queue = new DownloadQueueService(new SingleDbContextFactory(_db), _engine, _stats, _paths,
+            new SiteRegistry([new PixivSiteProvider()]),
+            NullLogger<DownloadQueueService>.Instance);
+
+        await queue.EnqueueAccountContentAsync(pixivAccount, ContentKind.AccountBookmarks, @"D:\dl",
+            new Dictionary<string, object?>());
+        await WaitUntil(() => queue.Active.Count == 0);
+
+        Assert.Equal(
+        [
+            "https://www.pixiv.net/users/99/bookmarks/artworks",
+            "https://www.pixiv.net/users/99/bookmarks/artworks?rest=hide",
+        ], _engine.Downloads.Last().Plan.Urls);
     }
 
     private static async Task WaitUntil(Func<bool> cond, int timeoutMs = 5000)

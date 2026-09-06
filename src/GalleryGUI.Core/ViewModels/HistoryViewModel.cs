@@ -17,18 +17,27 @@ namespace GalleryGUI.ViewModels;
 /// </summary>
 public sealed partial class HistoryRowViewModel : ObservableObject
 {
+    private static readonly HashSet<string> ImageExt = new(StringComparer.OrdinalIgnoreCase)
+        { ".jpg", ".jpeg", ".png", ".gif", ".webp", ".bmp" };
+    private static readonly HashSet<string> VideoExt = new(StringComparer.OrdinalIgnoreCase)
+        { ".mp4", ".webm", ".mov", ".mkv", ".m4v" };
+
     private readonly Func<HistoryRowViewModel, Task> _openContainingFolder;
     private readonly Action<HistoryRowViewModel> _openSource;
+    private readonly Action<HistoryRowViewModel> _openFile;
 
     public HistoryRowViewModel(HistoryRow model,
         Func<HistoryRowViewModel, Task> openContainingFolder,
-        Action<HistoryRowViewModel> openSource)
+        Action<HistoryRowViewModel> openSource,
+        Action<HistoryRowViewModel> openFile)
     {
         Model = model;
         _openContainingFolder = openContainingFolder;
         _openSource = openSource;
+        _openFile = openFile;
         OpenContainingFolderCommand = new AsyncRelayCommand(() => _openContainingFolder(this));
         OpenSourceCommand = new RelayCommand(() => _openSource(this));
+        OpenFileCommand = new RelayCommand(() => _openFile(this));
     }
 
     public HistoryRow Model { get; }
@@ -50,8 +59,25 @@ public sealed partial class HistoryRowViewModel : ObservableObject
     // 同 UsersViewModel.LastDownloadText 的先例模式（SQLite 读回 Kind=Unspecified，ToLocalTime 语义一致）
     public string CreatedText => Model.CreatedAt.ToLocalTime().ToString("yyyy-MM-dd HH:mm");
 
+    public bool IsImage => ImageExt.Contains(Path.GetExtension(Model.FilePath));
+    public bool IsVideo => VideoExt.Contains(Path.GetExtension(Model.FilePath));
+    public string? FileUri
+    {
+        get
+        {
+            try
+            {
+                var full = Path.GetFullPath(Model.FilePath);
+                if (!File.Exists(full)) return null;
+                return "file:///" + full.Replace('\\', '/');
+            }
+            catch (Exception) { return null; }
+        }
+    }
+
     public IAsyncRelayCommand OpenContainingFolderCommand { get; }
     public IRelayCommand OpenSourceCommand { get; }
+    public IRelayCommand OpenFileCommand { get; }
 
     /// <summary>brief Step 3：SizeText 人性化放 VM 内部 static（B/KB/MB/GB，F1 一位小数；无值 "—"）。</summary>
     public static string FormatSize(long? bytes) => bytes switch
@@ -91,6 +117,7 @@ public partial class HistoryViewModel : ObservableObject
         RefreshCommand = new AsyncRelayCommand(RefreshAsync, options: AsyncRelayCommandOptions.AllowConcurrentExecutions);
         OpenContainingFolderCommand = new AsyncRelayCommand<HistoryRowViewModel>(OpenContainingFolderCoreAsync);
         OpenSourceCommand = new RelayCommand<HistoryRowViewModel>(OpenSourceCore);
+        ToggleGalleryCommand = new RelayCommand(() => IsGallery = !IsGallery);
         ClearFiltersCommand = new RelayCommand(() =>
         {
             // 三个 null 赋值各自触发一次自动刷新，代数守卫保证最终结果一致
@@ -123,6 +150,14 @@ public partial class HistoryViewModel : ObservableObject
     public IAsyncRelayCommand<HistoryRowViewModel> OpenContainingFolderCommand { get; }
     public IRelayCommand<HistoryRowViewModel> OpenSourceCommand { get; }
     public IRelayCommand ClearFiltersCommand { get; } // 页面"清除筛选"按钮（brief 页面规格，Produces 之外补充）
+    public IRelayCommand ToggleGalleryCommand { get; }
+
+    [ObservableProperty]
+    private bool _isGallery = true;
+
+    public string GalleryToggleText => IsGallery ? "列表" : "画廊";
+
+    partial void OnIsGalleryChanged(bool value) => OnPropertyChanged(nameof(GalleryToggleText));
 
     partial void OnSelectedUserFilterChanged(User? value) => _ = RefreshCommand.ExecuteAsync(null);
     partial void OnFromDateChanged(DateTimeOffset? value) => _ = RefreshCommand.ExecuteAsync(null);
@@ -140,7 +175,7 @@ public partial class HistoryViewModel : ObservableObject
                 if (gen != _refreshId) return; // 过期刷新：已被更新的查询取代
                 Rows.Clear();
                 foreach (var r in list)
-                    Rows.Add(new HistoryRowViewModel(r, OpenContainingFolderCoreAsync, OpenSourceCore));
+                    Rows.Add(new HistoryRowViewModel(r, OpenContainingFolderCoreAsync, OpenSourceCore, OpenFileCore));
             });
         }
         catch (Exception ex) // 坏库等异常不崩线程（B5 模式）
@@ -182,6 +217,24 @@ public partial class HistoryViewModel : ObservableObject
             StatusMessage = $"打开文件夹失败：{ex.Message}";
         }
         return Task.CompletedTask;
+    }
+
+    private void OpenFileCore(HistoryRowViewModel row)
+    {
+        try
+        {
+            var path = Path.GetFullPath(row.Model.FilePath);
+            if (!File.Exists(path))
+            {
+                StatusMessage = "文件已被移动或删除";
+                return;
+            }
+            Process.Start(new ProcessStartInfo { FileName = path, UseShellExecute = true });
+        }
+        catch (Exception ex)
+        {
+            StatusMessage = $"打开文件失败：{ex.Message}";
+        }
     }
 
     private void OpenSourceCore(HistoryRowViewModel row)

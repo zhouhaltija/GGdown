@@ -91,6 +91,18 @@ public class UsersViewModelTests : IDisposable
     }
 
     [Fact]
+    public async Task DownloadSelected_clears_selection_after_enqueue()
+    {
+        await _vm.RefreshCommand.ExecuteAsync(null);
+        _vm.Users[0].IsSelected = true;
+        _vm.Users[1].IsSelected = true;
+        await _vm.DownloadSelectedCommand.ExecuteAsync(null);
+        Assert.Contains("已加入下载队列", _vm.StatusMessage);
+        Assert.Equal(0, _vm.SelectedCount);
+        Assert.All(_vm.Users, r => Assert.False(r.IsSelected));
+    }
+
+    [Fact]
     public async Task DownloadSelected_without_account_blocks_with_message()
     {
         await _db.Accounts.ExecuteDeleteAsync();
@@ -98,6 +110,8 @@ public class UsersViewModelTests : IDisposable
         _vm.Users[0].IsSelected = true;
         await _vm.DownloadSelectedCommand.ExecuteAsync(null);
         Assert.Contains("请先在设置中导入 Cookie", _vm.StatusMessage);
+        Assert.Equal(1, _vm.SelectedCount);
+        Assert.True(_vm.Users[0].IsSelected);
     }
 
     [Fact]
@@ -149,7 +163,7 @@ public class UsersViewModelTests : IDisposable
     public async Task Unavailable_site_shows_coming_soon()
     {
         var site = new FakeCurrentSite();
-        await site.SelectAsync("pixiv");
+        await site.SelectAsync("fanbox");
         var factory = new SingleDbContextFactory(_db);
         var sites = new SiteRegistry([new TwitterSiteProvider()]);
         var settings = new AppSettings(factory, sites);
@@ -162,7 +176,7 @@ public class UsersViewModelTests : IDisposable
         await vm.RefreshCommand.ExecuteAsync(null);
         Assert.True(vm.ShowComingSoon);
         Assert.False(vm.ShowUserList);
-        Assert.Contains("Pixiv", vm.ComingSoonMessage);
+        Assert.Contains("pixivFANBOX", vm.ComingSoonMessage);
         Assert.Contains("即将支持", vm.ComingSoonMessage);
     }
 
@@ -182,6 +196,79 @@ public class UsersViewModelTests : IDisposable
         Assert.Contains("暂停 1 个", _vm.StatusMessage);
         Assert.Single(_db.Jobs);
         Assert.Equal(_db.Users.Single(u => u.ScreenName == "bob").Id, _db.Jobs.Single().UserId);
+    }
+
+    [Fact]
+    public async Task Download_marks_row_as_downloading_until_job_finishes()
+    {
+        var gate = new TaskCompletionSource();
+        _engine.OnDownload = async (_, _, _, ct) => await gate.Task.WaitAsync(ct);
+        await _vm.RefreshCommand.ExecuteAsync(null);
+        var alice = _vm.Users.Single(r => r.Model.ScreenName == "alice");
+        await alice.DownloadCommand.ExecuteAsync(null);
+
+        Assert.True(alice.IsDownloading);
+        Assert.False(alice.CanDownload);
+        Assert.Equal("下载中", alice.DownloadButtonText);
+        Assert.Contains("下载中", alice.Subtitle);
+
+        gate.SetResult();
+        await WaitUntil(() => !alice.IsDownloading);
+        Assert.True(alice.CanDownload);
+        Assert.Equal("下载", alice.DownloadButtonText);
+        Assert.DoesNotContain("下载中", alice.Subtitle);
+    }
+
+    [Fact]
+    public async Task DownloadOne_blocked_when_user_is_already_queued()
+    {
+        var gate = new TaskCompletionSource();
+        _engine.OnDownload = async (_, _, _, ct) => await gate.Task.WaitAsync(ct);
+        await _vm.RefreshCommand.ExecuteAsync(null);
+        var alice = _vm.Users.Single(r => r.Model.ScreenName == "alice");
+        await alice.DownloadCommand.ExecuteAsync(null);
+        var jobs = _db.Jobs.Count();
+        await alice.DownloadCommand.ExecuteAsync(null);
+        Assert.Equal(jobs, _db.Jobs.Count());
+        Assert.Contains("已在下载队列", _vm.StatusMessage);
+        gate.SetResult();
+        await WaitUntil(() => !alice.IsDownloading);
+    }
+
+    [Fact]
+    public async Task DownloadSelected_skips_users_already_in_queue()
+    {
+        var gate = new TaskCompletionSource();
+        _engine.OnDownload = async (_, _, _, ct) => await gate.Task.WaitAsync(ct);
+        await _vm.RefreshCommand.ExecuteAsync(null);
+        var alice = _vm.Users.Single(r => r.Model.ScreenName == "alice");
+        await alice.DownloadCommand.ExecuteAsync(null);
+        var aliceJobs = _db.Jobs.Count(j => j.UserId == alice.Model.Id);
+
+        var bobId = _vm.Users.Single(r => r.Model.ScreenName == "bob").Model.Id;
+        _vm.SelectAll(true);
+        await _vm.DownloadSelectedCommand.ExecuteAsync(null);
+        Assert.Contains("跳过 1 个下载中", _vm.StatusMessage);
+        Assert.Equal(aliceJobs, _db.Jobs.Count(j => j.UserId == alice.Model.Id));
+        Assert.Equal(1, _db.Jobs.Count(j => j.UserId == bobId));
+        Assert.Equal(0, _vm.SelectedCount);
+        gate.SetResult();
+        await WaitUntil(() => _vm.Users.All(r => !r.IsDownloading));
+    }
+
+    [Fact]
+    public async Task Refresh_preserves_downloading_state()
+    {
+        var gate = new TaskCompletionSource();
+        _engine.OnDownload = async (_, _, _, ct) => await gate.Task.WaitAsync(ct);
+        await _vm.RefreshCommand.ExecuteAsync(null);
+        await _vm.Users.Single(r => r.Model.ScreenName == "alice").DownloadCommand.ExecuteAsync(null);
+        await _vm.RefreshCommand.ExecuteAsync(null);
+        var alice = _vm.Users.Single(r => r.Model.ScreenName == "alice");
+        Assert.True(alice.IsDownloading);
+        Assert.Equal("下载中", alice.DownloadButtonText);
+        gate.SetResult();
+        await WaitUntil(() => !alice.IsDownloading);
     }
 
     [Fact]
@@ -211,6 +298,79 @@ public class UsersViewModelTests : IDisposable
         Assert.False(_db.Users.AsNoTracking().Single(u => u.Id == id).IsSkipped);
         Assert.Contains("已恢复", _vm.StatusMessage);
         Assert.Equal("暂停", _vm.Users.Single(r => r.Model.Id == id).SkipButtonText);
+    }
+
+    [Fact]
+    public async Task Download_pixiv_enqueues_artworks_and_novels()
+    {
+        var site = new FakeCurrentSite();
+        await site.SelectAsync("pixiv");
+        var factory = new SingleDbContextFactory(_db);
+        var sites = new SiteRegistry([new PixivSiteProvider()]);
+        var account = new Account
+        {
+            SiteId = "pixiv", CookiePath = "c", RestId = "1", ScreenName = "me",
+            Status = AccountStatus.Ok, IsActive = true, AddedAt = DateTime.UtcNow,
+        };
+        var user = new User
+        {
+            SiteId = "pixiv", RestId = "12345", ScreenName = "foo", DisplayName = "Foo",
+            Source = UserSource.Manual, AddedAt = DateTime.UtcNow, UpdatedAt = DateTime.UtcNow,
+        };
+        _db.Accounts.Add(account);
+        _db.Users.Add(user);
+        _db.SaveChanges();
+        var settings = new AppSettings(factory, sites);
+        var queue = new DownloadQueueService(factory, _engine, new FakeStats(), _paths, sites,
+            NullLogger<DownloadQueueService>.Instance);
+        var vm = new UsersViewModel(new UserQueryService(factory), new AccountQueryService(factory),
+            new UserService(_db, _engine, _paths, sites, NullLogger<UserService>.Instance),
+            queue, settings, new SyncDispatcher(), sites, site,
+            new HistoryQueryService(factory));
+        vm.Users.CollectionChanged += (_, _) => { };
+        await vm.RefreshCommand.ExecuteAsync(null);
+        await vm.Users.Single().DownloadCommand.ExecuteAsync(null);
+        await WaitJobs(2, account.Id);
+        Assert.Contains(_db.Jobs, j => j.TargetKind == TargetKind.UserMedia);
+        Assert.Contains(_db.Jobs, j => j.TargetKind == TargetKind.UserNovels);
+    }
+
+    [Fact]
+    public async Task Download_pixiv_both_toggles_off_prompts()
+    {
+        var site = new FakeCurrentSite();
+        await site.SelectAsync("pixiv");
+        var factory = new SingleDbContextFactory(_db);
+        var sites = new SiteRegistry([new PixivSiteProvider()]);
+        var account = new Account
+        {
+            SiteId = "pixiv", CookiePath = "c", RestId = "1", ScreenName = "me",
+            Status = AccountStatus.Ok, IsActive = true, AddedAt = DateTime.UtcNow,
+        };
+        var user = new User
+        {
+            SiteId = "pixiv", RestId = "9", ScreenName = "z",
+            Source = UserSource.Manual, AddedAt = DateTime.UtcNow, UpdatedAt = DateTime.UtcNow,
+        };
+        _db.Accounts.Add(account);
+        _db.Users.Add(user);
+        _db.SaveChanges();
+        var settings = new AppSettings(factory, sites);
+        await settings.SetSiteOptionsAsync("pixiv", new Dictionary<string, object?>
+        {
+            ["download_artworks"] = false, ["download_novels"] = false,
+        });
+        var queue = new DownloadQueueService(factory, _engine, new FakeStats(), _paths, sites,
+            NullLogger<DownloadQueueService>.Instance);
+        var vm = new UsersViewModel(new UserQueryService(factory), new AccountQueryService(factory),
+            new UserService(_db, _engine, _paths, sites, NullLogger<UserService>.Instance),
+            queue, settings, new SyncDispatcher(), sites, site,
+            new HistoryQueryService(factory));
+        vm.Users.CollectionChanged += (_, _) => { };
+        await vm.RefreshCommand.ExecuteAsync(null);
+        await vm.Users.Single().DownloadCommand.ExecuteAsync(null);
+        Assert.Contains("至少启用一种作品类型", vm.StatusMessage);
+        Assert.Empty(_db.Jobs.Where(j => j.AccountId == account.Id));
     }
 
     [Fact]
@@ -256,6 +416,32 @@ public class UsersViewModelTests : IDisposable
 
     // 修复波 F4：两态全选 → 逐行 IsSelected 且 SelectedCount 同步更新
     [Fact]
+    public async Task NewMedia_badge_when_count_grew_since_last_download()
+    {
+        _db.Users.Single(u => u.ScreenName == "alice").MediaCount = 12;
+        _db.Users.Single(u => u.ScreenName == "alice").MediaCountAtDownload = 10;
+        _db.SaveChanges();
+        await _vm.RefreshCommand.ExecuteAsync(null);
+        var alice = _vm.Users.Single(r => r.Model.ScreenName == "alice");
+        Assert.True(alice.HasNewMedia);
+        Assert.Equal(2, alice.NewMediaCount);
+        Assert.Equal("新 +2", alice.NewMediaText);
+        Assert.True(alice.ShowHighlights);
+    }
+
+    [Fact]
+    public async Task DownloadHighlights_enqueues_highlights_kind()
+    {
+        var gate = new TaskCompletionSource();
+        _engine.OnDownload = async (_, _, _, ct) => await gate.Task.WaitAsync(ct);
+        await _vm.RefreshCommand.ExecuteAsync(null);
+        await _vm.Users.Single(r => r.Model.ScreenName == "alice").DownloadHighlightsCommand.ExecuteAsync(null);
+        Assert.Contains("高光", _vm.StatusMessage);
+        Assert.Contains(_db.Jobs, j => j.TargetKind == TargetKind.UserHighlights);
+        gate.SetResult();
+    }
+
+    [Fact]
     public async Task SelectAll_sets_every_row_and_updates_SelectedCount()
     {
         await _vm.RefreshCommand.ExecuteAsync(null);
@@ -264,6 +450,40 @@ public class UsersViewModelTests : IDisposable
         Assert.All(_vm.Users, r => Assert.True(r.IsSelected));
         _vm.SelectAll(false);
         Assert.Equal(0, _vm.SelectedCount);
+    }
+
+    [Fact]
+    public async Task InvertSelection_flips_each_row()
+    {
+        await _vm.RefreshCommand.ExecuteAsync(null);
+        _vm.Users[0].IsSelected = true;
+        _vm.InvertSelection();
+        Assert.False(_vm.Users[0].IsSelected);
+        Assert.True(_vm.Users[1].IsSelected);
+        Assert.Equal(1, _vm.SelectedCount);
+        _vm.InvertSelection();
+        Assert.True(_vm.Users[0].IsSelected);
+        Assert.False(_vm.Users[1].IsSelected);
+    }
+
+    private static async Task WaitUntil(Func<bool> cond, int timeoutMs = 5000)
+    {
+        var start = Environment.TickCount;
+        while (!cond())
+        {
+            if (Environment.TickCount - start > timeoutMs) throw new TimeoutException("等待条件超时");
+            await Task.Delay(20);
+        }
+    }
+
+    private async Task WaitJobs(int count, long accountId, int timeoutMs = 5000)
+    {
+        var start = Environment.TickCount;
+        while (_db.Jobs.Count(j => j.AccountId == accountId) < count)
+        {
+            if (Environment.TickCount - start > timeoutMs) throw new TimeoutException("等待入队超时");
+            await Task.Delay(20);
+        }
     }
 
     private sealed class ThrowingUserQuery : IUserQueryService

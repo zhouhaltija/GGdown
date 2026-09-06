@@ -6,13 +6,14 @@ namespace GalleryGUI.Tests.Sites;
 public class SiteCatalogTests
 {
     [Fact]
-    public void Twitter_is_the_only_available_site()
+    public void Twitter_and_pixiv_are_available()
     {
         Assert.Contains(SiteCatalog.All, s => s.SiteId == "twitter" && s.Available);
+        Assert.Contains(SiteCatalog.All, s => s.SiteId == "pixiv" && s.Available);
         Assert.Equal("twitter", SiteCatalog.Default.SiteId);
         Assert.True(SiteCatalog.Default.Available);
         Assert.Contains(SiteCatalog.All, s => !s.Available);
-        Assert.False(SiteCatalog.Get("pixiv").Available);
+        Assert.False(SiteCatalog.Get("fanbox").Available);
         Assert.Equal(SiteCatalog.Default, SiteCatalog.Get("nope"));
     }
 
@@ -20,7 +21,8 @@ public class SiteCatalogTests
     public void Coming_soon_label_marks_unavailable_sites()
     {
         Assert.Equal("X (Twitter)", SiteCatalog.Get("twitter").Label);
-        Assert.Contains("即将支持", SiteCatalog.Get("pixiv").Label);
+        Assert.Equal("Pixiv", SiteCatalog.Get("pixiv").Label);
+        Assert.Contains("即将支持", SiteCatalog.Get("fanbox").Label);
     }
 }
 
@@ -52,7 +54,7 @@ public class CurrentSiteTests : IDisposable
         await _current.SelectAsync("pixiv");
         Assert.True(saw);
         Assert.Equal("pixiv", _current.SiteId);
-        Assert.False(_current.IsAvailable);
+        Assert.True(_current.IsAvailable);
 
         var other = new CurrentSite(_settings);
         await other.LoadAsync();

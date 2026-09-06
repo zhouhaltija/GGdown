@@ -17,11 +17,16 @@ def make_api(cookies_path):
 
 def map_transformed(u):
     """gallery-dl _transform_user 结果 -> 协议 user 事件字段（纯函数，可测）。"""
+    banner = u.get("profile_banner") or None
     return {
         "rest_id": str(u["id"]),
         "screen_name": u.get("name"),
         "display_name": u.get("nick"),
         "avatar_url": u.get("profile_image"),
+        "banner_url": banner if banner else None,
+        "bio": u.get("description"),
+        "followers_count": u.get("followers_count"),
+        "media_count": u.get("media_count"),
     }
 
 
@@ -74,10 +79,11 @@ def whoami(cookies_path):
     u = ext._transform_user(raw)
     if not u.get("name"):
         raise AuthError("cookie 无效或已过期")
-    return {"screen_name": u["name"], "display_name": u.get("nick")}
+    return {"screen_name": u["name"], "display_name": u.get("nick"), "rest_id": rest_id}
 
 
-def list_following(cookies_path, screen_name):
+def list_following(cookies_path, me):
+    screen_name = me["screen_name"] if isinstance(me, dict) else me
     api, ext = make_api(cookies_path)
     for raw in api.user_following(screen_name):
         if "rest_id" not in raw:

@@ -17,6 +17,7 @@ public class StatsAggregator(IDbContextFactory<GalleryDbContext> factory)
             .ExecuteUpdateAsync(s => s
                 .SetProperty(u => u.DownloadCount, u => u.DownloadCount + 1)
                 .SetProperty(u => u.LastDownloadAt, now)
+                .SetProperty(u => u.MediaCountAtDownload, u => u.MediaCount)
                 .SetProperty(u => u.UpdatedAt, now), ct);
     }
 

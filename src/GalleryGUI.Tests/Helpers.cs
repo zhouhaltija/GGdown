@@ -36,7 +36,7 @@ public static class TestPaths
 public sealed class FakeEngine : IDownloadEngine
 {
     public EngineHello Hello { get; set; } = new(1, "fake", "fake");
-    public AccountInfo WhoAmI { get; set; } = new("stub_user", "Stub User");
+    public AccountInfo WhoAmI { get; set; } = new("stub_user", "Stub User", "99");
     public Exception? WhoAmIError { get; set; }
     public IReadOnlyList<SiteUserInfo> NextFollowing { get; set; } =
         [new("1", "alice", "Alice", "https://x/a.png"), new("2", "bob", "Bob", "https://x/b.png")];
@@ -46,15 +46,21 @@ public sealed class FakeEngine : IDownloadEngine
 
     public Task<EngineHello> HelloAsync(CancellationToken ct = default) => Task.FromResult(Hello);
 
-    public Task<AccountInfo> WhoAmIAsync(string cookiesFile, CancellationToken ct = default)
-        => WhoAmIError is not null ? Task.FromException<AccountInfo>(WhoAmIError) : Task.FromResult(WhoAmI);
+    public string? LastSiteId { get; private set; }
+
+    public Task<AccountInfo> WhoAmIAsync(string siteId, string cookiesFile, CancellationToken ct = default)
+    {
+        LastSiteId = siteId;
+        return WhoAmIError is not null ? Task.FromException<AccountInfo>(WhoAmIError) : Task.FromResult(WhoAmI);
+    }
 
     public TaskCompletionSource<IReadOnlyList<SiteUserInfo>>? FollowingDelay { get; set; }
     public Exception? ListFollowingError { get; set; }
     public int ListFollowingCalls { get; private set; }
 
-    public async Task<IReadOnlyList<SiteUserInfo>> ListFollowingAsync(string cookiesFile, CancellationToken ct = default)
+    public async Task<IReadOnlyList<SiteUserInfo>> ListFollowingAsync(string siteId, string cookiesFile, CancellationToken ct = default)
     {
+        LastSiteId = siteId;
         ListFollowingCalls++;
         if (ListFollowingError is not null)
             return await Task.FromException<IReadOnlyList<SiteUserInfo>>(ListFollowingError);
@@ -63,8 +69,11 @@ public sealed class FakeEngine : IDownloadEngine
         return NextFollowing;
     }
 
-    public Task<SiteUserInfo> GetUserInfoAsync(string cookiesFile, string input, CancellationToken ct = default)
-        => Task.FromResult(NextUserInfo);
+    public Task<SiteUserInfo> GetUserInfoAsync(string siteId, string cookiesFile, string input, CancellationToken ct = default)
+    {
+        LastSiteId = siteId;
+        return Task.FromResult(NextUserInfo);
+    }
 
     public Task DownloadAsync(DownloadPlan plan, string cookiesFile, IProgress<EngineEvent> progress, CancellationToken ct = default)
     {

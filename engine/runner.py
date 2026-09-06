@@ -10,7 +10,7 @@ import traceback
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-from sites import AuthError, EventHandler, apply_proxy_from_env, classify_error, emit, emit_hello
+from sites import AuthError, EventHandler, apply_proxy_from_env, classify_error, emit, emit_hello, load_site
 
 
 class EventOutput:
@@ -57,27 +57,28 @@ class CountingLogHandler(EventHandler):
 
 
 def cmd_whoami(args):
-    from sites import twitter
+    site = load_site(args.site)
     emit_hello()
-    info = twitter.whoami(args.cookies)
-    emit("account", screen_name=info["screen_name"], display_name=info.get("display_name"))
+    info = site.whoami(args.cookies)
+    emit("account", screen_name=info["screen_name"], display_name=info.get("display_name"),
+         rest_id=info.get("rest_id"))
 
 
 def cmd_list_following(args):
-    from sites import twitter
+    site = load_site(args.site)
     emit_hello()
-    me = twitter.whoami(args.cookies)["screen_name"]
+    info = site.whoami(args.cookies)
     n = 0
-    for user in twitter.list_following(args.cookies, me):
+    for user in site.list_following(args.cookies, info):
         emit("user", **user)
         n += 1
     emit("end", total=n)
 
 
 def cmd_user_info(args):
-    from sites import twitter
+    site = load_site(args.site)
     emit_hello()
-    user = twitter.user_info(args.cookies, args.input)
+    user = site.user_info(args.cookies, args.input)
     emit("user", **user)
     emit("end", total=1)
 

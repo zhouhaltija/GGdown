@@ -8,6 +8,7 @@ using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
 using Microsoft.UI.Xaml.Media;
 using Microsoft.UI.Xaml.Navigation;
+using Windows.ApplicationModel.DataTransfer;
 using Windows.UI;
 
 namespace GalleryGUI.App.Views;
@@ -41,6 +42,37 @@ public sealed partial class UsersPage : Page
         }
     }
 
+    private async void OnPasteFromClipboardClick(object sender, RoutedEventArgs e)
+    {
+        try
+        {
+            var content = Clipboard.GetContent();
+            if (!content.Contains(StandardDataFormats.Text))
+            {
+                Vm.StatusMessage = "剪贴板里没有文本";
+                return;
+            }
+            var text = await content.GetTextAsync();
+            var vm = App.Current.Services.GetRequiredService<ImportViewModel>();
+            vm.ImportCompleted += OnImportCompleted;
+            vm.UserInput = text;
+            if (string.IsNullOrWhiteSpace(vm.UserInputError) && !string.IsNullOrWhiteSpace(text))
+            {
+                await vm.AddUserAsync();
+                Vm.StatusMessage = vm.ResultMessage;
+                return;
+            }
+            var dialog = new AddUserDialog(vm) { XamlRoot = App.Current.MainWindow.DialogXamlRoot };
+            if (await dialog.ShowAsync() != ContentDialogResult.Primary) return;
+            await vm.AddUserAsync();
+            Vm.StatusMessage = vm.ResultMessage;
+        }
+        catch (Exception ex)
+        {
+            Vm.StatusMessage = ex.Message;
+        }
+    }
+
     // ---- B4 对话框接线：每个对话框配一个新 ImportViewModel（transient，输入/结果消息不串台） ----
 
     private async void OnShowAddUserRequested()
@@ -67,12 +99,12 @@ public sealed partial class UsersPage : Page
         {
             var vm = App.Current.Services.GetRequiredService<ImportViewModel>();
             vm.ImportCompleted += OnImportCompleted;
-            var dialog = new ImportCookieDialog(App.Current.Services.GetRequiredService<FileDialogService>())
+            var dialog = new ImportCookieDialog(App.Current.Services.GetRequiredService<FileDialogService>(), vm.RequiresRefreshToken)
             {
                 XamlRoot = App.Current.MainWindow.DialogXamlRoot,
             };
             if (await dialog.ShowAsync() != ContentDialogResult.Primary || dialog.CookiesPath is null) return;
-            await vm.ImportCookiesAsync(dialog.CookiesPath);
+            await vm.ImportCookiesAsync(dialog.CookiesPath, dialog.RefreshToken);
             Vm.StatusMessage = vm.ResultMessage;
         }
         catch (Exception ex)
@@ -118,7 +150,7 @@ public sealed partial class UsersPage : Page
         }
     }
 
-    // ---- F4：排序下拉与表头全选 ----
+    // ---- F4：排序下拉 ----
 
     // SelectedIndex 0/1/2 → SortBy 字符串；变更经 VM 与 SearchText 同机制的 300ms 防抖刷新。
     // 初始 SelectedIndex=0 触发的 SelectionChanged 赋回默认值 "last_download"，不产生属性变更、不触发刷新。
@@ -129,11 +161,6 @@ public sealed partial class UsersPage : Page
             2 => "added_at",
             _ => "last_download",
         };
-
-    // 两态全选（定稿：不支持 indeterminate 显示）；SelectAll 逐行设 IsSelected 并经 SelectedChanged 更新计数
-    private void OnSelectAllChecked(object sender, RoutedEventArgs e) => Vm.SelectAll(true);
-
-    private void OnSelectAllUnchecked(object sender, RoutedEventArgs e) => Vm.SelectAll(false);
 
     // 勾选是真正的多选；表格自带的当前行高亮会另涂一层深灰，这里清掉。
     private bool _clearingGridSelection;

@@ -36,6 +36,9 @@ namespace GalleryGUI.Core.Migrations
                     b.Property<bool>("IsActive")
                         .HasColumnType("INTEGER");
 
+                    b.Property<string>("RestId")
+                        .HasColumnType("TEXT");
+
                     b.Property<string>("ScreenName")
                         .HasColumnType("TEXT");
 
@@ -215,10 +218,19 @@ namespace GalleryGUI.Core.Migrations
                     b.Property<string>("AvatarUrl")
                         .HasColumnType("TEXT");
 
+                    b.Property<string>("BannerUrl")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("Bio")
+                        .HasColumnType("TEXT");
+
                     b.Property<string>("DisplayName")
                         .HasColumnType("TEXT");
 
                     b.Property<long>("DownloadCount")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<long?>("FollowersCount")
                         .HasColumnType("INTEGER");
 
                     b.Property<bool>("InDownloadList")
@@ -232,6 +244,12 @@ namespace GalleryGUI.Core.Migrations
 
                     b.Property<DateTime?>("LastDownloadAt")
                         .HasColumnType("TEXT");
+
+                    b.Property<long?>("MediaCount")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<long?>("MediaCountAtDownload")
+                        .HasColumnType("INTEGER");
 
                     b.Property<long?>("OwnerAccountId")
                         .HasColumnType("INTEGER");

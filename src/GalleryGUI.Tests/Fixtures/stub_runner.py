@@ -21,7 +21,13 @@ def main():
         if any("bad" in a for a in args):
             emit("fatal", msg="cookie 无效", kind="auth")
             return 2
-        emit("account", screen_name="stub_user", display_name="Stub User")
+        site = "twitter"
+        if "--site" in args:
+            site = args[args.index("--site") + 1]
+        if site == "pixiv":
+            emit("account", screen_name="pixiv_user", display_name="Pixiv User", rest_id="12345")
+        else:
+            emit("account", screen_name="stub_user", display_name="Stub User", rest_id="99")
         return 0
     if cmd == "list-following":
         emit("user", rest_id="1", screen_name="alice", display_name="Alice",
