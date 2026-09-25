@@ -43,11 +43,14 @@ public class GGdownDbContextTests : IDisposable
     };
 
     [Fact]
-    public async Task Initialize_applies_migration_without_error()
+    public async Task Initialize_global_applies_migration_without_error()
     {
-        // 内存库上 Migrate 需要先 EnsureDeleted 以清空 EnsureCreated 的痕迹
-        await Db.Database.EnsureDeletedAsync();
-        var ex = await Record.ExceptionAsync(() => DbInitializer.InitializeAsync(Db));
+        // Task 6：启动初始化针对全局库（旧 context 不再有启动初始化）
+        var (conn, global) = TestDb.CreateGlobal();
+        await using var _ = global;
+        await global.Database.EnsureDeletedAsync(); // 内存库上 Migrate 需清 EnsureCreated 痕迹
+        var ex = await Record.ExceptionAsync(() => DbInitializer.InitializeGlobalAsync(global));
         Assert.Null(ex);
+        conn.Dispose();
     }
 }

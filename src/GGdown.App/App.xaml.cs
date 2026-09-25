@@ -100,10 +100,14 @@ public partial class App : Application
             try
             {
                 using var scope = Services.CreateScope();
-                // B1 补充（见报告偏离 5）：brief 未规定 DbInitializer 调用点，Phase A 的建库/迁移无人执行——
-                // 全新机器上首跑会因缺表使恢复与所有页面查询失败，故在首次触库前先建库
-                await DbInitializer.InitializeAsync(
-                    scope.ServiceProvider.GetRequiredService<GGdownDbContext>());
+                // Task 6：存量单库拆分（幂等：主库含 Accounts 表才动，先于全局库初始化）
+                var split = await SiteDbSplitMigration.ApplyAsync(paths);
+                if (split.Sites > 0)
+                    Log.Information("存量库拆分完成：{Sites} 个平台库，账号 {Accounts}/用户 {Users}/任务 {Jobs}/文件 {Files}，孤儿任务 {Orphans}",
+                        split.Sites, split.Accounts, split.Users, split.Jobs, split.Files, split.OrphanJobs);
+                // B1 补充（沿用）：首次触库前先建库/迁移（全局库）；平台库由 ISiteDbContextFactory 惰性建
+                await DbInitializer.InitializeGlobalAsync(
+                    scope.ServiceProvider.GetRequiredService<GGdownGlobalDbContext>());
                 await scope.ServiceProvider.GetRequiredService<StatsAggregator>()
                     .RecalculateDownloadCountsAsync();
                 // Global Constraint：启动即应用保存的并发数（此前仅设置页应用，未访问设置页不生效）

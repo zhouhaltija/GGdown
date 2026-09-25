@@ -24,14 +24,11 @@ public static class CoreServices
         services.AddSingleton<IDownloadEngine, RunnerEngine>();
         services.AddSingleton<SiteRegistry>(_ => new SiteRegistry([new TwitterSiteProvider(), new PixivSiteProvider()]));
 
-        // 适配（对调 brief 中两行的顺序）：AddDbContextFactory 先注册，使 DbContextOptions 为 Singleton——
-        // singleton 工厂捕获 scoped options 会在启用 scope 校验的宿主（Development 默认）构建 DI 时失败；
-        // 两个注册的连接串相同，调序后功能不变。
-        services.AddDbContextFactory<GGdownDbContext>(o => o.UseSqlite($"Data Source={paths.DbFile}"));
-        services.AddDbContext<GGdownDbContext>(o => o.UseSqlite($"Data Source={paths.DbFile}"));
-
-        // Task 3 起双库：全局库走 DI（AppSettings/启动初始化用）；平台库不进 AddDbContextFactory
-        // ——由 ISiteDbContextFactory 按站点建 options（无 scoped 需求，Pooling=False 见其实现注释）。
+        // Task 3/5/6 双库：全局库走 DI（AppSettings/启动初始化用），AddDbContextFactory 先注册使
+        // options 为 Singleton（沿用控制器裁定：singleton 工厂捕获 scoped options 在 scope 校验宿主会炸）；
+        // 平台库不进 AddDbContextFactory——由 ISiteDbContextFactory 按站点建 options
+        // （无 scoped 需求，Pooling=False 见其实现注释）。旧 GGdownDbContext 已无运行时消费方，
+        // 仅保留给存量拆分迁移（自建 options）与设计时工厂。
         services.AddDbContextFactory<GGdownGlobalDbContext>(o => o.UseSqlite($"Data Source={paths.DbFile}"));
         services.AddDbContext<GGdownGlobalDbContext>(o => o.UseSqlite($"Data Source={paths.DbFile}"));
         services.AddSingleton<ISiteDbContextFactory>(sp => new SiteDbContextFactory(sp.GetRequiredService<IAppPaths>()));
