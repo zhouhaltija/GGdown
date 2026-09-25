@@ -29,18 +29,26 @@ public class SiteCatalogTests
 public class CurrentSiteTests : IDisposable
 {
     private readonly (Microsoft.Data.Sqlite.SqliteConnection, global::GGdown.Data.GGdownDbContext) _t;
+    private readonly (Microsoft.Data.Sqlite.SqliteConnection, global::GGdown.Data.GGdownGlobalDbContext) _global = TestDb.CreateGlobal();
+    private readonly GGdown.Paths.AppPaths _paths = TestPaths.Create();
     private readonly IAppSettings _settings;
     private readonly CurrentSite _current;
 
     public CurrentSiteTests()
     {
         _t = TestDb.Create();
-        _settings = new AppSettings(new SingleDbContextFactory(_t.Item2),
-            new SiteRegistry([new TwitterSiteProvider()]));
+        // Task 3：AppSettings 走全局库 + 平台库（此处只触 ui.currentSite 全局键）
+        _settings = new AppSettings(new SingleGlobalDbContextFactory(_global.Item2),
+            new SiteRegistry([new TwitterSiteProvider()]), new global::GGdown.Data.SiteDbContextFactory(_paths));
         _current = new CurrentSite(_settings);
     }
 
-    public void Dispose() => _t.Item1.Dispose();
+    public void Dispose()
+    {
+        _t.Item1.Dispose();
+        _global.Item1.Dispose();
+        if (Directory.Exists(_paths.Root)) Directory.Delete(_paths.Root, true);
+    }
 
     [Fact]
     public async Task Defaults_to_twitter_and_persists_selection()

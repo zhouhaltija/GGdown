@@ -30,7 +30,13 @@ public static class CoreServices
         services.AddDbContextFactory<GGdownDbContext>(o => o.UseSqlite($"Data Source={paths.DbFile}"));
         services.AddDbContext<GGdownDbContext>(o => o.UseSqlite($"Data Source={paths.DbFile}"));
 
-        services.AddScoped<ISettingsStore, GGdownSettingsStore>();
+        // Task 3 起双库：全局库走 DI（AppSettings/启动初始化用）；平台库不进 AddDbContextFactory
+        // ——由 ISiteDbContextFactory 按站点建 options（无 scoped 需求，Pooling=False 见其实现注释）。
+        services.AddDbContextFactory<GGdownGlobalDbContext>(o => o.UseSqlite($"Data Source={paths.DbFile}"));
+        services.AddDbContext<GGdownGlobalDbContext>(o => o.UseSqlite($"Data Source={paths.DbFile}"));
+        services.AddSingleton<ISiteDbContextFactory>(sp => new SiteDbContextFactory(sp.GetRequiredService<IAppPaths>()));
+
+        services.AddScoped<ISettingsStore, GGdownSettingsStore<GGdownGlobalDbContext>>();
         services.AddScoped<IAccountService, AccountService>();
         services.AddScoped<IUserService, UserService>();
         services.AddSingleton<StatsAggregator>(); // T11 落地

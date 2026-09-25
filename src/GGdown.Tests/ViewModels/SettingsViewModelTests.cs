@@ -21,6 +21,7 @@ namespace GGdown.Tests.ViewModels;
 public class SettingsViewModelTests : IDisposable
 {
     private readonly (SqliteConnection, GGdownDbContext) _t;
+    private readonly (SqliteConnection, GGdownGlobalDbContext) _global = TestDb.CreateGlobal();
     private readonly AppPaths _paths = TestPaths.Create();
     private readonly FakeEngine _engine = new();
     private readonly GGdownDbContext _db;
@@ -41,7 +42,7 @@ public class SettingsViewModelTests : IDisposable
         });
         _db.SaveChanges();
         _sites = new SiteRegistry([new TwitterSiteProvider()]);
-        _settings = new AppSettings(factory, _sites);
+        _settings = new AppSettings(new SingleGlobalDbContextFactory(_global.Item2), _sites, new SiteDbContextFactory(_paths));
         _queue = new DownloadQueueService(factory, _engine, new FakeStats(), _paths, _sites, NullLogger<DownloadQueueService>.Instance);
         var accountSvc = new AccountService(_db, _engine, _paths, _sites, NullLogger<AccountService>.Instance);
         _vm = new SettingsViewModel(_settings, accountSvc, new AccountQueryService(factory),
@@ -50,6 +51,7 @@ public class SettingsViewModelTests : IDisposable
     public void Dispose()
     {
         _t.Item1.Dispose();
+        _global.Item1.Dispose();
         if (Directory.Exists(_paths.Root)) Directory.Delete(_paths.Root, true);
     }
 

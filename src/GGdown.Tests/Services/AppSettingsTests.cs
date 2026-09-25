@@ -1,25 +1,37 @@
+using GGdown.Data;
+using GGdown.Services;
 using GGdown.Settings;
 using GGdown.Sites;
 using Microsoft.Data.Sqlite; // 补 using：SqliteConnection 在 tuple 类型中未限定（brief 已知偏离模式）
+using Microsoft.EntityFrameworkCore;
 
 namespace GGdown.Tests.Services;
 
 public class AppSettingsTests : IDisposable
 {
-    // 命名空间限定偏离：GGdown.Tests.Data（GGdownDbContextTests.cs）遮蔽 GGdown.Data，
-    // brief 的 `Data.GGdownDbContext` 解析失败，改用 global:: 全限定（最小修正，已记录）。
-    private readonly (SqliteConnection, global::GGdown.Data.GGdownDbContext) _t;
+    // 命名空间限定偏离：GGdown.Tests.Data（GGdownDbContextTests.cs）遮蔽 GGdown.Data，改用 global:: 全限定。
+    private readonly (SqliteConnection, GGdownGlobalDbContext) _global;
     private readonly IAppSettings _settings;
+    private readonly GGdown.Paths.AppPaths _paths;
 
     public AppSettingsTests()
     {
-        _t = TestDb.Create();
+        _global = TestDb.CreateGlobal();
+        _paths = TestPaths.Create();
         var sites = new SiteRegistry([new TwitterSiteProvider()]);
-        // captive dependency 修复（控制器裁定）：AppSettings 改注入 IDbContextFactory；SingleDbContextFactory
-        // 每次返回共享同一 SqliteConnection 的新上下文，await using 释放的不是测试持有的 _db。
-        _settings = new AppSettings(new SingleDbContextFactory(_t.Item2), sites);
+        // Task 3：AppSettings 走全局库 + 平台库双 factory（captive dependency 裁定不变：
+        // 两个 factory 均为 singleton 安全，await using 释放的不是测试持有的连接）
+        _settings = new AppSettings(
+            new SingleGlobalDbContextFactory(_global.Item2),
+            sites,
+            new SiteDbContextFactory(_paths));
     }
-    public void Dispose() => _t.Item1.Dispose();
+
+    public void Dispose()
+    {
+        _global.Item1.Dispose();
+        if (Directory.Exists(_paths.Root)) Directory.Delete(_paths.Root, true);
+    }
 
     [Fact]
     public async Task Download_directory_falls_back_to_default_when_missing_or_blank()
@@ -54,6 +66,18 @@ public class AppSettingsTests : IDisposable
     }
 
     [Fact]
+    public async Task Site_options_stored_in_site_db_not_global()
+    {
+        await _settings.SetSiteOptionsAsync("twitter", new Dictionary<string, object?> { ["videos"] = true });
+        // 平台库有行
+        await using var siteDb = await new SiteDbContextFactory(_paths).CreateAsync("twitter");
+        Assert.True(await siteDb.SiteSettings.AnyAsync(s => s.SiteId == "twitter" && s.Key == "videos"));
+        // 全局库没有 site.<id>.options 键
+        Assert.Null(await new GGdownSettingsStore<GGdownGlobalDbContext>(_global.Item2)
+            .GetAsync<string>("site.twitter.options", null));
+    }
+
+    [Fact]
     public async Task Proxy_missing_is_disabled_and_roundtrips()
     {
         var missing = await _settings.GetProxyAsync();
@@ -73,4 +97,37 @@ public class AppSettingsTests : IDisposable
         await _settings.SetProxyAsync(new ProxyConfig("http", "", 0));
         Assert.False((await _settings.GetProxyAsync()).IsEnabled);
     }
+
+    [Fact]
+    public async Task Visible_sites_default_to_available_and_survive_roundtrip()
+    {
+        // 默认 = 目录中全部 Available 站点（与 SiteRegistry 注册了几个 provider 无关）
+        Assert.Equal(DefaultAvailable, await _settings.GetVisibleSitesAsync());
+        await _settings.SetVisibleSitesAsync(["twitter", "pixiv", "danbooru"]);
+        Assert.Equal(["twitter", "pixiv", "danbooru"], await _settings.GetVisibleSitesAsync());
+    }
+
+    [Fact]
+    public async Task Visible_sites_empty_or_corrupt_json_falls_back_to_available()
+    {
+        var store = new GGdownSettingsStore<GGdownGlobalDbContext>(_global.Item2);
+        await store.SetAsync<string>("ui.visibleSites", "");
+        Assert.Equal(DefaultAvailable, await _settings.GetVisibleSitesAsync());
+        await store.SetAsync<string>("ui.visibleSites", "not json");
+        Assert.Equal(DefaultAvailable, await _settings.GetVisibleSitesAsync());
+        await _settings.SetVisibleSitesAsync(Array.Empty<string>());
+        Assert.Equal(DefaultAvailable, await _settings.GetVisibleSitesAsync());
+    }
+
+    [Fact]
+    public async Task Site_last_page_roundtrip_and_default()
+    {
+        Assert.Equal("users", await _settings.GetSiteLastPageAsync("twitter"));
+        await _settings.SetSiteLastPageAsync("pixiv", "history");
+        Assert.Equal("history", await _settings.GetSiteLastPageAsync("pixiv"));
+        Assert.Equal("users", await _settings.GetSiteLastPageAsync("twitter"));
+    }
+
+    private static IReadOnlyList<string> DefaultAvailable =>
+        [.. SiteCatalog.All.Where(s => s.Available).Select(s => s.SiteId)];
 }

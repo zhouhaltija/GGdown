@@ -22,6 +22,7 @@ namespace GGdown.Tests.ViewModels;
 public class ImportViewModelTests : IDisposable
 {
     private readonly (SqliteConnection, GGdownDbContext) _t;
+    private readonly (SqliteConnection, GGdownGlobalDbContext) _global = TestDb.CreateGlobal();
     private readonly AppPaths _paths = TestPaths.Create();
     private readonly FakeEngine _engine = new();
     private readonly GGdownDbContext _db;
@@ -37,7 +38,7 @@ public class ImportViewModelTests : IDisposable
         var sites = new SiteRegistry([new TwitterSiteProvider()]);
         var accountSvc = new AccountService(_db, _engine, _paths, sites, NullLogger<AccountService>.Instance);
         var userSvc = new UserService(_db, _engine, _paths, sites, NullLogger<UserService>.Instance);
-        var settings = new AppSettings(factory, sites);
+        var settings = new AppSettings(new SingleGlobalDbContextFactory(_global.Item2), sites, new SiteDbContextFactory(_paths));
         var queue = new DownloadQueueService(factory, _engine, new FakeStats(), _paths, sites, NullLogger<DownloadQueueService>.Instance);
         _vm = new ImportViewModel(accountSvc, userSvc, new AccountQueryService(factory), queue, settings, new SyncDispatcher(), sites, new FakeCurrentSite());
     }
@@ -114,7 +115,7 @@ public class ImportViewModelTests : IDisposable
         var site = new FakeCurrentSite();
         await site.SelectAsync("pixiv");
         var sites = new SiteRegistry([new TwitterSiteProvider(), new PixivSiteProvider()]);
-        var settings = new AppSettings(factory, sites);
+        var settings = new AppSettings(new SingleGlobalDbContextFactory(_global.Item2), sites, new SiteDbContextFactory(_paths));
         var queue = new DownloadQueueService(factory, _engine, new FakeStats(), _paths, sites, NullLogger<DownloadQueueService>.Instance);
         var vm = new ImportViewModel(
             new AccountService(_db, _engine, _paths, sites, NullLogger<AccountService>.Instance),

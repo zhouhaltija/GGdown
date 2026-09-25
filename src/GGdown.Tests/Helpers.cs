@@ -20,6 +20,15 @@ public static class TestDb
         db.Database.EnsureCreated();
         return (conn, db);
     }
+
+    public static (SqliteConnection Connection, GGdownGlobalDbContext Db) CreateGlobal()
+    {
+        var conn = new SqliteConnection("Data Source=:memory:");
+        conn.Open();
+        var db = new GGdownGlobalDbContext(new DbContextOptionsBuilder<GGdownGlobalDbContext>().UseSqlite(conn).Options);
+        db.Database.EnsureCreated();
+        return (conn, db);
+    }
 }
 
 public static class TestPaths
@@ -114,6 +123,16 @@ public sealed class FakeCurrentSite : GGdown.Sites.ICurrentSite
         Changed?.Invoke();
         return Task.CompletedTask;
     }
+}
+
+/// <summary>
+/// 包装测试内存全局库的 IDbContextFactory（Task 3 起供 AppSettings 等注入用）。
+/// 语义同 SingleDbContextFactory：共享同一 SqliteConnection，返回新 context。
+/// </summary>
+public sealed class SingleGlobalDbContextFactory(GGdownGlobalDbContext db) : IDbContextFactory<GGdownGlobalDbContext>
+{
+    public GGdownGlobalDbContext CreateDbContext() =>
+        new(new DbContextOptionsBuilder<GGdownGlobalDbContext>().UseSqlite(db.Database.GetDbConnection()).Options);
 }
 
 /// <summary>

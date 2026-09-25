@@ -7,12 +7,13 @@ namespace GGdown.Tests.Services;
 public class SettingsStoreTests : IDisposable
 {
     private readonly (SqliteConnection, GGdownDbContext) _t;
-    private readonly GGdownSettingsStore _store;
+    private readonly GGdownSettingsStore<GGdownDbContext> _store;
 
     public SettingsStoreTests()
     {
         _t = TestDb.Create();
-        _store = new GGdownSettingsStore(_t.Item2);
+        // 旧库 context 仍映射 SettingEntity（存量拆分迁移读取用），泛型化后语义不变
+        _store = new GGdownSettingsStore<GGdownDbContext>(_t.Item2);
     }
     public void Dispose() => _t.Item1.Dispose();
 

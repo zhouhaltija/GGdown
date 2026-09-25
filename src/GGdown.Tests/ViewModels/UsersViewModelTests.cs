@@ -15,6 +15,7 @@ namespace GGdown.Tests.ViewModels;
 public class UsersViewModelTests : IDisposable
 {
     private readonly (SqliteConnection, GGdownDbContext) _t;
+    private readonly (SqliteConnection, GGdownGlobalDbContext) _global = TestDb.CreateGlobal();
     private readonly AppPaths _paths = TestPaths.Create();
     private readonly FakeEngine _engine = new();
     private readonly GGdownDbContext _db;
@@ -36,7 +37,7 @@ public class UsersViewModelTests : IDisposable
         var sites = new SiteRegistry([new TwitterSiteProvider()]);
         // 适配（B2 控制器裁定后 brief 原行过时）：AppSettings 注入 IDbContextFactory 而非 ISettingsStore，
         // 原文 new AppSettings(new GGdownSettingsStore(_db), sites) 已无法编译
-        _settings = new AppSettings(factory, sites);
+        _settings = new AppSettings(new SingleGlobalDbContextFactory(_global.Item2), sites, new SiteDbContextFactory(_paths));
         var queue = new DownloadQueueService(factory, _engine, new FakeStats(), _paths, sites, NullLogger<DownloadQueueService>.Instance);
         var accountSvc = new AccountService(_db, _engine, _paths, sites, NullLogger<AccountService>.Instance);
         var userSvc = new UserService(_db, _engine, _paths, sites, NullLogger<UserService>.Instance);
@@ -48,6 +49,7 @@ public class UsersViewModelTests : IDisposable
     public void Dispose()
     {
         _t.Item1.Dispose();
+        _global.Item1.Dispose();
         if (Directory.Exists(_paths.Root)) Directory.Delete(_paths.Root, true);
     }
 
@@ -130,7 +132,7 @@ public class UsersViewModelTests : IDisposable
     {
         var factory = new SingleDbContextFactory(_db);
         var sites = new SiteRegistry([new TwitterSiteProvider()]);
-        var settings = new AppSettings(factory, sites);
+        var settings = new AppSettings(new SingleGlobalDbContextFactory(_global.Item2), sites, new SiteDbContextFactory(_paths));
         var queue = new DownloadQueueService(factory, _engine, new FakeStats(), _paths, sites, NullLogger<DownloadQueueService>.Instance);
         var vm = new UsersViewModel(new ThrowingUserQuery(), new AccountQueryService(factory),
             new UserService(_db, _engine, _paths, sites, NullLogger<UserService>.Instance),
@@ -166,7 +168,7 @@ public class UsersViewModelTests : IDisposable
         await site.SelectAsync("fanbox");
         var factory = new SingleDbContextFactory(_db);
         var sites = new SiteRegistry([new TwitterSiteProvider()]);
-        var settings = new AppSettings(factory, sites);
+        var settings = new AppSettings(new SingleGlobalDbContextFactory(_global.Item2), sites, new SiteDbContextFactory(_paths));
         var queue = new DownloadQueueService(factory, _engine, new FakeStats(), _paths, sites, NullLogger<DownloadQueueService>.Instance);
         var vm = new UsersViewModel(new UserQueryService(factory), new AccountQueryService(factory),
             new UserService(_db, _engine, _paths, sites, NullLogger<UserService>.Instance),
@@ -320,7 +322,7 @@ public class UsersViewModelTests : IDisposable
         _db.Accounts.Add(account);
         _db.Users.Add(user);
         _db.SaveChanges();
-        var settings = new AppSettings(factory, sites);
+        var settings = new AppSettings(new SingleGlobalDbContextFactory(_global.Item2), sites, new SiteDbContextFactory(_paths));
         var queue = new DownloadQueueService(factory, _engine, new FakeStats(), _paths, sites,
             NullLogger<DownloadQueueService>.Instance);
         var vm = new UsersViewModel(new UserQueryService(factory), new AccountQueryService(factory),
@@ -355,7 +357,7 @@ public class UsersViewModelTests : IDisposable
         _db.Accounts.Add(account);
         _db.Users.Add(user);
         _db.SaveChanges();
-        var settings = new AppSettings(factory, sites);
+        var settings = new AppSettings(new SingleGlobalDbContextFactory(_global.Item2), sites, new SiteDbContextFactory(_paths));
         await settings.SetSiteOptionsAsync("pixiv", new Dictionary<string, object?>
         {
             ["download_artworks"] = false, ["download_novels"] = false,
