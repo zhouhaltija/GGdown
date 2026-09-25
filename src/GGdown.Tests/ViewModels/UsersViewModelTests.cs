@@ -22,6 +22,7 @@ public class UsersViewModelTests : IDisposable
     private readonly UsersViewModel _vm;
     private readonly Account _account;
     private readonly AppSettings _settings;
+    private readonly FakeCurrentSite _site = new();
 
     public UsersViewModelTests()
     {
@@ -42,7 +43,7 @@ public class UsersViewModelTests : IDisposable
         var accountSvc = new AccountService(new SingleSiteDbContextFactory(_db), _engine, _paths, sites, NullLogger<AccountService>.Instance);
         var userSvc = new UserService(new SingleSiteDbContextFactory(_db), _engine, _paths, sites, NullLogger<UserService>.Instance);
         _vm = new UsersViewModel(new UserQueryService(new SingleSiteDbContextFactory(_db)), new AccountQueryService(new SingleSiteDbContextFactory(_db)),
-            userSvc, queue, _settings, new SyncDispatcher(), sites, new FakeCurrentSite(),
+            userSvc, queue, _settings, new SyncDispatcher(), sites, _site,
             new HistoryQueryService(new SingleSiteDbContextFactory(_db, "twitter", "pixiv")));
         _vm.Users.CollectionChanged += (_, _) => { };
     }
@@ -494,5 +495,23 @@ public class UsersViewModelTests : IDisposable
             => throw new InvalidOperationException("boom");
         public Task<IReadOnlyList<User>> ListDownloadListAsync(string siteId, CancellationToken ct = default)
             => throw new InvalidOperationException("boom");
+    }
+
+    // ---- Task 11（Review Focus 1）：共享页面缓存跨平台切换无脏状态 ----
+
+    [Fact]
+    public async Task Users_reload_on_site_change()
+    {
+        // 同库混播两站数据：twitter 2 人（构造播种）+ pixiv 1 人
+        _db.Users.Add(new User
+        { SiteId = "pixiv", RestId = "p1", ScreenName = "pico", Source = UserSource.Manual, AddedAt = DateTime.UtcNow, UpdatedAt = DateTime.UtcNow });
+        _db.SaveChanges();
+
+        await _vm.RefreshCommand.ExecuteAsync(null);
+        Assert.Equal(["alice", "bob"], _vm.Users.Select(r => r.Model.ScreenName).ToArray()); // twitter 视角
+
+        await _site.SelectAsync("pixiv"); // 触发 ICurrentSite.Changed → RefreshAsync
+        await Task.Delay(100); // 异步刷新落地
+        Assert.Equal(["pico"], _vm.Users.Select(r => r.Model.ScreenName).ToArray()); // 切站后无残留
     }
 }
