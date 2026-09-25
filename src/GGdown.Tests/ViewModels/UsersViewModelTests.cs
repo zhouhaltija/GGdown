@@ -38,7 +38,7 @@ public class UsersViewModelTests : IDisposable
         // 适配（B2 控制器裁定后 brief 原行过时）：AppSettings 注入 IDbContextFactory 而非 ISettingsStore，
         // 原文 new AppSettings(new GGdownSettingsStore(_db), sites) 已无法编译
         _settings = new AppSettings(new SingleGlobalDbContextFactory(_global.Item2), sites, new SiteDbContextFactory(_paths));
-        var queue = new DownloadQueueService(factory, _engine, new FakeStats(), _paths, sites, NullLogger<DownloadQueueService>.Instance);
+        var queue = new DownloadQueueService(new SingleSiteDbContextFactory(_db), _engine, new FakeStats(), _paths, sites, NullLogger<DownloadQueueService>.Instance);
         var accountSvc = new AccountService(new SingleSiteDbContextFactory(_db), _engine, _paths, sites, NullLogger<AccountService>.Instance);
         var userSvc = new UserService(new SingleSiteDbContextFactory(_db), _engine, _paths, sites, NullLogger<UserService>.Instance);
         _vm = new UsersViewModel(new UserQueryService(new SingleSiteDbContextFactory(_db)), new AccountQueryService(new SingleSiteDbContextFactory(_db)),
@@ -133,7 +133,7 @@ public class UsersViewModelTests : IDisposable
         var factory = new SingleDbContextFactory(_db);
         var sites = new SiteRegistry([new TwitterSiteProvider()]);
         var settings = new AppSettings(new SingleGlobalDbContextFactory(_global.Item2), sites, new SiteDbContextFactory(_paths));
-        var queue = new DownloadQueueService(factory, _engine, new FakeStats(), _paths, sites, NullLogger<DownloadQueueService>.Instance);
+        var queue = new DownloadQueueService(new SingleSiteDbContextFactory(_db), _engine, new FakeStats(), _paths, sites, NullLogger<DownloadQueueService>.Instance);
         var vm = new UsersViewModel(new ThrowingUserQuery(), new AccountQueryService(new SingleSiteDbContextFactory(_db)),
             new UserService(new SingleSiteDbContextFactory(_db), _engine, _paths, sites, NullLogger<UserService>.Instance),
             queue, settings, new SyncDispatcher(), sites, new FakeCurrentSite(),
@@ -169,7 +169,7 @@ public class UsersViewModelTests : IDisposable
         var factory = new SingleDbContextFactory(_db);
         var sites = new SiteRegistry([new TwitterSiteProvider()]);
         var settings = new AppSettings(new SingleGlobalDbContextFactory(_global.Item2), sites, new SiteDbContextFactory(_paths));
-        var queue = new DownloadQueueService(factory, _engine, new FakeStats(), _paths, sites, NullLogger<DownloadQueueService>.Instance);
+        var queue = new DownloadQueueService(new SingleSiteDbContextFactory(_db), _engine, new FakeStats(), _paths, sites, NullLogger<DownloadQueueService>.Instance);
         var vm = new UsersViewModel(new UserQueryService(new SingleSiteDbContextFactory(_db)), new AccountQueryService(new SingleSiteDbContextFactory(_db)),
             new UserService(new SingleSiteDbContextFactory(_db), _engine, _paths, sites, NullLogger<UserService>.Instance),
             queue, settings, new SyncDispatcher(), sites, site,
@@ -323,7 +323,7 @@ public class UsersViewModelTests : IDisposable
         _db.Users.Add(user);
         _db.SaveChanges();
         var settings = new AppSettings(new SingleGlobalDbContextFactory(_global.Item2), sites, new SiteDbContextFactory(_paths));
-        var queue = new DownloadQueueService(factory, _engine, new FakeStats(), _paths, sites,
+        var queue = new DownloadQueueService(new SingleSiteDbContextFactory(_db), _engine, new FakeStats(), _paths, sites,
             NullLogger<DownloadQueueService>.Instance);
         var vm = new UsersViewModel(new UserQueryService(new SingleSiteDbContextFactory(_db)), new AccountQueryService(new SingleSiteDbContextFactory(_db)),
             new UserService(new SingleSiteDbContextFactory(_db), _engine, _paths, sites, NullLogger<UserService>.Instance),
@@ -362,7 +362,7 @@ public class UsersViewModelTests : IDisposable
         {
             ["download_artworks"] = false, ["download_novels"] = false,
         });
-        var queue = new DownloadQueueService(factory, _engine, new FakeStats(), _paths, sites,
+        var queue = new DownloadQueueService(new SingleSiteDbContextFactory(_db), _engine, new FakeStats(), _paths, sites,
             NullLogger<DownloadQueueService>.Instance);
         var vm = new UsersViewModel(new UserQueryService(new SingleSiteDbContextFactory(_db)), new AccountQueryService(new SingleSiteDbContextFactory(_db)),
             new UserService(new SingleSiteDbContextFactory(_db), _engine, _paths, sites, NullLogger<UserService>.Instance),

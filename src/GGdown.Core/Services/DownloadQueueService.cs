@@ -37,7 +37,7 @@ public interface IDownloadQueueService
 }
 
 public sealed class DownloadQueueService(
-    IDbContextFactory<GGdownDbContext> factory,
+    ISiteDbContextFactory siteFactory,
     IDownloadEngine engine,
     StatsAggregator stats,
     IAppPaths paths,
@@ -78,12 +78,12 @@ public sealed class DownloadQueueService(
         long first = 0;
         var cookieAbs = AccountService.AbsoluteCookiePath(paths, account);
         var archive = Path.Combine(paths.ArchiveDir, account.Id + ".txt");
-        await using var db = await factory.CreateDbContextAsync(ct);
+        await using var db = await siteFactory.CreateAsync(account.SiteId, ct);
         foreach (var user in users)
         {
             var job = new DownloadJob
             {
-                AccountId = account.Id, TargetKind = targetKind, UserId = user.Id,
+                AccountId = account.Id, SiteId = account.SiteId, TargetKind = targetKind, UserId = user.Id,
                 Status = JobStatus.Pending, CreatedAt = DateTime.UtcNow,
             };
             db.Jobs.Add(job);
@@ -114,10 +114,10 @@ public sealed class DownloadQueueService(
         var targetKind = (TargetKind)kind;
         var cookieAbs = AccountService.AbsoluteCookiePath(paths, account);
         var archive = Path.Combine(paths.ArchiveDir, account.Id + ".txt");
-        await using var db = await factory.CreateDbContextAsync(ct);
+        await using var db = await siteFactory.CreateAsync(account.SiteId, ct);
         var job = new DownloadJob
         {
-            AccountId = account.Id, TargetKind = targetKind, UserId = null,
+            AccountId = account.Id, SiteId = account.SiteId, TargetKind = targetKind, UserId = null,
             Status = JobStatus.Pending, CreatedAt = DateTime.UtcNow,
         };
         db.Jobs.Add(job);
@@ -140,10 +140,10 @@ public sealed class DownloadQueueService(
         var targetKind = (TargetKind)kind;
         var cookieAbs = AccountService.AbsoluteCookiePath(paths, account);
         var archive = Path.Combine(paths.ArchiveDir, account.Id + ".txt");
-        await using var db = await factory.CreateDbContextAsync(ct);
+        await using var db = await siteFactory.CreateAsync(account.SiteId, ct);
         var job = new DownloadJob
         {
-            AccountId = account.Id, TargetKind = targetKind, UserId = null,
+            AccountId = account.Id, SiteId = account.SiteId, TargetKind = targetKind, UserId = null,
             Status = JobStatus.Pending, CreatedAt = DateTime.UtcNow,
         };
         db.Jobs.Add(job);
@@ -163,11 +163,15 @@ public sealed class DownloadQueueService(
 
     public async Task RecoverOnStartupAsync(CancellationToken ct = default)
     {
-        await using var db = await factory.CreateDbContextAsync(ct);
-        await db.Jobs.Where(j => j.Status == JobStatus.Pending || j.Status == JobStatus.Running)
-            .ExecuteUpdateAsync(s => s
-                .SetProperty(j => j.Status, JobStatus.Failed)
-                .SetProperty(j => j.ErrorMessage, "应用异常退出，任务中断"), ct);
+        // Task 5：跨平台库恢复——遍历磁盘上已存在的全部站点库
+        foreach (var siteId in siteFactory.ExistingSites())
+        {
+            await using var db = await siteFactory.CreateAsync(siteId, ct);
+            await db.Jobs.Where(j => j.Status == JobStatus.Pending || j.Status == JobStatus.Running)
+                .ExecuteUpdateAsync(s => s
+                    .SetProperty(j => j.Status, JobStatus.Failed)
+                    .SetProperty(j => j.ErrorMessage, "应用异常退出，任务中断"), ct);
+        }
     }
 
     private void EnsureWorkers()
@@ -209,7 +213,7 @@ public sealed class DownloadQueueService(
         var cts = new CancellationTokenSource();
         lock (_gate) _cancels[item.JobId] = cts;
 
-        await using (var db = await factory.CreateDbContextAsync())
+        await using (var db = await siteFactory.CreateAsync(item.SiteId))
         {
             var job = await db.Jobs.SingleAsync(j => j.Id == item.JobId);
             job.Status = JobStatus.Running;
@@ -248,12 +252,12 @@ public sealed class DownloadQueueService(
                         break;
                     case "file-done":
                         done++;
-                        pendingInserts.Add(InsertFileAsync(item.JobId, item.UserId, ev, FileStatus.Downloaded, ev.ItemId ?? currentItemId));
+                        pendingInserts.Add(InsertFileAsync(item.JobId, item.SiteId, item.UserId, ev, FileStatus.Downloaded, ev.ItemId ?? currentItemId));
                         UpdateSnapshot(item.JobId, done: done);
                         break;
                     case "file-skip":
                         skipped++;
-                        pendingInserts.Add(InsertFileAsync(item.JobId, item.UserId, ev, FileStatus.Skipped, ev.ItemId ?? currentItemId));
+                        pendingInserts.Add(InsertFileAsync(item.JobId, item.SiteId, item.UserId, ev, FileStatus.Skipped, ev.ItemId ?? currentItemId));
                         UpdateSnapshot(item.JobId, skipped: skipped);
                         break;
                     case "log" when ev.Level == "error":
@@ -282,7 +286,7 @@ public sealed class DownloadQueueService(
             await Task.WhenAll(pendingInserts); // 统计聚合前排干在途文件落库（审查 Important-2）
             await FinishJobAsync(item, JobStatus.Failed, "登录态失效，请重新导入 Cookie", hasFinal,
                 totalFinal, skippedFinal, failedFinal, done, skipped, failed);
-            await using var db = await factory.CreateDbContextAsync();
+            await using var db = await siteFactory.CreateAsync(item.SiteId);
             await db.Accounts.Where(a => a.Id == item.AccountId)
                 .ExecuteUpdateAsync(s => s.SetProperty(a => a.Status, AccountStatus.Invalid));
             AccountInvalid?.Invoke(item.AccountId, e.Message);
@@ -314,14 +318,14 @@ public sealed class DownloadQueueService(
         }
     }
 
-    private async Task InsertFileAsync(long jobId, long? userId, EngineEvent ev, FileStatus status, string? itemId)
+    private async Task InsertFileAsync(long jobId, string siteId, long? userId, EngineEvent ev, FileStatus status, string? itemId)
     {
         try
         {
-            await using var db = await factory.CreateDbContextAsync();
+            await using var db = await siteFactory.CreateAsync(siteId);
             db.Files.Add(new DownloadFile
             {
-                JobId = jobId, UserId = userId, SourceItemId = itemId,
+                JobId = jobId, SiteId = siteId, UserId = userId, SourceItemId = itemId,
                 Url = ev.Url ?? "", FilePath = ev.Path ?? "",
                 FileSize = ev.Size, Status = status, CreatedAt = DateTime.UtcNow,
             });
@@ -338,7 +342,7 @@ public sealed class DownloadQueueService(
         var skipped = hasFinal ? skippedFinal : skippedLive;
         var failed = hasFinal ? failedFinal : failedLive;
 
-        await using var db = await factory.CreateDbContextAsync();
+        await using var db = await siteFactory.CreateAsync(item.SiteId);
         var job = await db.Jobs.SingleAsync(j => j.Id == item.JobId);
         job.Status = status;
         job.DoneFiles = done;

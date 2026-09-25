@@ -11,18 +11,18 @@ namespace GGdown.Tests.Services;
 
 public class DownloadQueueServiceTests : IDisposable
 {
-    private readonly (SqliteConnection, GGdownDbContext) _t;
+    private readonly (SqliteConnection, GGdownSiteDbContext) _t;
     private readonly AppPaths _paths;
     private readonly FakeEngine _engine = new();
     private readonly FakeStats _stats = new();
-    private readonly GGdownDbContext _db;
+    private readonly GGdownSiteDbContext _db;
     private readonly Account _account;
     private readonly User _alice;
     private readonly DownloadQueueService _queue;
 
     public DownloadQueueServiceTests()
     {
-        _t = TestDb.Create();
+        _t = TestDb.CreateSite();
         _db = _t.Item2;
         _paths = TestPaths.Create();
         _account = new Account
@@ -32,8 +32,8 @@ public class DownloadQueueServiceTests : IDisposable
         _db.Accounts.Add(_account);
         _db.Users.Add(_alice);
         _db.SaveChanges();
-        // 控制器裁定：实现签名为 IDbContextFactory<GGdownDbContext>，测试传 SingleDbContextFactory（Task 11 已落位 Helpers.cs，勿重复添加）
-        _queue = new DownloadQueueService(new SingleDbContextFactory(_db), _engine, _stats, _paths,
+        // Task 5：队列改走 ISiteDbContextFactory（站点库；预播 twitter 供恢复遍历 ExistingSites）
+        _queue = new DownloadQueueService(new SingleSiteDbContextFactory(_db, "twitter"), _engine, _stats, _paths,
             new SiteRegistry([new TwitterSiteProvider()]),
             NullLogger<DownloadQueueService>.Instance);
     }
@@ -44,6 +44,68 @@ public class DownloadQueueServiceTests : IDisposable
     }
 
     private static IReadOnlyDictionary<string, object?> Opts() => new Dictionary<string, object?> { ["videos"] = true };
+
+    // ---- Task 5：拆库后的归属与跨库恢复 ----
+
+    [Fact]
+    public async Task Enqueue_persists_job_with_site_id_in_site_db()
+    {
+        var jobId = await _queue.EnqueueUserMediaAsync(_account, [_alice], @"D:\dl", Opts());
+        await WaitUntil(() => _queue.Active.Count == 0);
+        var job = await _db.Jobs.AsNoTracking().SingleAsync();
+        Assert.Equal(jobId, job.Id);
+        Assert.Equal("twitter", job.SiteId); // 任务显式携带归属（spec §3.2）
+    }
+
+    [Fact]
+    public async Task Recover_marks_pending_running_failed_across_site_dbs()
+    {
+        var paths = TestPaths.Create();
+        var factory = new SiteDbContextFactory(paths);
+        long twId, pxId;
+        await using (var tw = await factory.CreateAsync("twitter"))
+        {
+            var acc = new Account
+            { SiteId = "twitter", CookiePath = "c", Status = AccountStatus.Ok, IsActive = true, AddedAt = DateTime.UtcNow };
+            tw.Accounts.Add(acc);
+            tw.SaveChanges();
+            var job = new DownloadJob
+            { SiteId = "twitter", AccountId = acc.Id, TargetKind = TargetKind.UserMedia, Status = JobStatus.Running, CreatedAt = DateTime.UtcNow };
+            tw.Jobs.Add(job);
+            tw.SaveChanges();
+            twId = job.Id;
+        }
+        await using (var px = await factory.CreateAsync("pixiv"))
+        {
+            var acc = new Account
+            { SiteId = "pixiv", CookiePath = "c", Status = AccountStatus.Ok, IsActive = true, AddedAt = DateTime.UtcNow };
+            px.Accounts.Add(acc);
+            px.SaveChanges();
+            var job = new DownloadJob
+            { SiteId = "pixiv", AccountId = acc.Id, TargetKind = TargetKind.UserMedia, Status = JobStatus.Pending, CreatedAt = DateTime.UtcNow };
+            px.Jobs.Add(job);
+            px.SaveChanges();
+            pxId = job.Id;
+        }
+
+        var queue = new DownloadQueueService(factory, _engine, new FakeStats(), paths,
+            new SiteRegistry([new TwitterSiteProvider()]), NullLogger<DownloadQueueService>.Instance);
+        await queue.RecoverOnStartupAsync();
+
+        await using (var tw = await factory.CreateAsync("twitter"))
+        {
+            var j = await tw.Jobs.AsNoTracking().SingleAsync(x => x.Id == twId);
+            Assert.Equal(JobStatus.Failed, j.Status);
+            Assert.Contains("应用异常退出", j.ErrorMessage);
+        }
+        await using (var px = await factory.CreateAsync("pixiv"))
+        {
+            var j = await px.Jobs.AsNoTracking().SingleAsync(x => x.Id == pxId);
+            Assert.Equal(JobStatus.Failed, j.Status);
+            Assert.Contains("应用异常退出", j.ErrorMessage);
+        }
+        Directory.Delete(paths.Root, true);
+    }
 
     [Fact]
     public async Task Enqueue_user_runs_job_and_records_files()
@@ -247,7 +309,7 @@ public class DownloadQueueServiceTests : IDisposable
         _db.Accounts.Add(pixivAccount);
         _db.Users.Add(artist);
         await _db.SaveChangesAsync();
-        var queue = new DownloadQueueService(new SingleDbContextFactory(_db), _engine, _stats, _paths,
+        var queue = new DownloadQueueService(new SingleSiteDbContextFactory(_db), _engine, _stats, _paths,
             new SiteRegistry([new PixivSiteProvider()]),
             NullLogger<DownloadQueueService>.Instance);
 
@@ -271,7 +333,7 @@ public class DownloadQueueServiceTests : IDisposable
         };
         _db.Accounts.Add(pixivAccount);
         await _db.SaveChangesAsync();
-        var queue = new DownloadQueueService(new SingleDbContextFactory(_db), _engine, _stats, _paths,
+        var queue = new DownloadQueueService(new SingleSiteDbContextFactory(_db), _engine, _stats, _paths,
             new SiteRegistry([new PixivSiteProvider()]),
             NullLogger<DownloadQueueService>.Instance);
 

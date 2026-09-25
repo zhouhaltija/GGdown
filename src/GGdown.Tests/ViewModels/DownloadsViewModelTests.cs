@@ -46,7 +46,7 @@ public class DownloadsViewModelTests : IDisposable
         _db.SaveChanges();
         var sites = new SiteRegistry([new TwitterSiteProvider()]);
         var settings = new AppSettings(new SingleGlobalDbContextFactory(_global.Item2), sites, new SiteDbContextFactory(_paths));
-        _queue = new DownloadQueueService(_factory, _engine, new FakeStats(), _paths, sites,
+        _queue = new DownloadQueueService(new SingleSiteDbContextFactory(_db), _engine, new FakeStats(), _paths, sites,
             NullLogger<DownloadQueueService>.Instance);
         _vm = CreateVm(_site);
         _vm.Start(); // 页面 OnNavigatedTo 的等价调用：订阅 + 播种 + HasAccount 刷新

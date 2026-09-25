@@ -39,7 +39,7 @@ public class ImportViewModelTests : IDisposable
         var accountSvc = new AccountService(new SingleSiteDbContextFactory(_db), _engine, _paths, sites, NullLogger<AccountService>.Instance);
         var userSvc = new UserService(new SingleSiteDbContextFactory(_db), _engine, _paths, sites, NullLogger<UserService>.Instance);
         var settings = new AppSettings(new SingleGlobalDbContextFactory(_global.Item2), sites, new SiteDbContextFactory(_paths));
-        var queue = new DownloadQueueService(factory, _engine, new FakeStats(), _paths, sites, NullLogger<DownloadQueueService>.Instance);
+        var queue = new DownloadQueueService(new SingleSiteDbContextFactory(_db), _engine, new FakeStats(), _paths, sites, NullLogger<DownloadQueueService>.Instance);
         _vm = new ImportViewModel(accountSvc, userSvc, new AccountQueryService(new SingleSiteDbContextFactory(_db)), queue, settings, new SyncDispatcher(), sites, new FakeCurrentSite());
     }
     public void Dispose()
@@ -116,7 +116,7 @@ public class ImportViewModelTests : IDisposable
         await site.SelectAsync("pixiv");
         var sites = new SiteRegistry([new TwitterSiteProvider(), new PixivSiteProvider()]);
         var settings = new AppSettings(new SingleGlobalDbContextFactory(_global.Item2), sites, new SiteDbContextFactory(_paths));
-        var queue = new DownloadQueueService(factory, _engine, new FakeStats(), _paths, sites, NullLogger<DownloadQueueService>.Instance);
+        var queue = new DownloadQueueService(new SingleSiteDbContextFactory(_db), _engine, new FakeStats(), _paths, sites, NullLogger<DownloadQueueService>.Instance);
         var vm = new ImportViewModel(
             new AccountService(new SingleSiteDbContextFactory(_db), _engine, _paths, sites, NullLogger<AccountService>.Instance),
             new UserService(new SingleSiteDbContextFactory(_db), _engine, _paths, sites, NullLogger<UserService>.Instance),

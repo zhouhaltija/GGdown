@@ -43,7 +43,7 @@ public class SettingsViewModelTests : IDisposable
         _db.SaveChanges();
         _sites = new SiteRegistry([new TwitterSiteProvider()]);
         _settings = new AppSettings(new SingleGlobalDbContextFactory(_global.Item2), _sites, new SiteDbContextFactory(_paths));
-        _queue = new DownloadQueueService(factory, _engine, new FakeStats(), _paths, _sites, NullLogger<DownloadQueueService>.Instance);
+        _queue = new DownloadQueueService(new SingleSiteDbContextFactory(_db), _engine, new FakeStats(), _paths, _sites, NullLogger<DownloadQueueService>.Instance);
         var accountSvc = new AccountService(new SingleSiteDbContextFactory(_db), _engine, _paths, _sites, NullLogger<AccountService>.Instance);
         _vm = new SettingsViewModel(_settings, accountSvc, new AccountQueryService(new SingleSiteDbContextFactory(_db)),
             _engine, _queue, _paths, _sites, new SyncDispatcher(), new FakeCurrentSite());
