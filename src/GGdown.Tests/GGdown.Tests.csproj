@@ -18,5 +18,6 @@
   <ItemGroup>
     <None Include="Fixtures\stub_runner.py" CopyToOutputDirectory="PreserveNewest" />
     <None Include="..\GGdown.App\Views\UsersPage.xaml" Link="XamlFixtures\UsersPage.xaml" CopyToOutputDirectory="PreserveNewest" />
+    <None Include="..\GGdown.App\MainWindow.xaml" Link="XamlFixtures\MainWindow.xaml" CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
 </Project>

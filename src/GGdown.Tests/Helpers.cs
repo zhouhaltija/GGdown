@@ -183,3 +183,47 @@ public sealed class FakeStats : StatsAggregator
     public override Task RecalculateDownloadCountsAsync(CancellationToken ct = default)
         => Task.CompletedTask;
 }
+
+/// <summary>
+/// IAppSettings 的内存假实现（Task 8：MainNavViewModel 测试用；只覆盖导航相关键）。
+/// </summary>
+public sealed class FakeAppSettings : GGdown.Settings.IAppSettings
+{
+    public string? SavedCurrentSiteId { get; private set; }
+    public Dictionary<string, string> LastPages { get; } = [];
+    private IReadOnlyList<string> _visible = ["twitter", "pixiv"];
+
+    public Task<string> GetDownloadDirectoryAsync(CancellationToken ct = default) =>
+        Task.FromResult(@"D:\dl");
+    public Task SetDownloadDirectoryAsync(string directory, CancellationToken ct = default) => Task.CompletedTask;
+    public Task<int> GetConcurrencyAsync(CancellationToken ct = default) => Task.FromResult(1);
+    public Task SetConcurrencyAsync(int concurrency, CancellationToken ct = default) => Task.CompletedTask;
+    public Task<GGdown.Settings.ProxyConfig> GetProxyAsync(CancellationToken ct = default) =>
+        Task.FromResult(new GGdown.Settings.ProxyConfig());
+    public Task SetProxyAsync(GGdown.Settings.ProxyConfig proxy, CancellationToken ct = default) => Task.CompletedTask;
+    public Task<string> GetCurrentSiteIdAsync(CancellationToken ct = default) =>
+        Task.FromResult(SavedCurrentSiteId ?? "twitter");
+    public Task SetCurrentSiteIdAsync(string siteId, CancellationToken ct = default)
+    {
+        SavedCurrentSiteId = siteId;
+        return Task.CompletedTask;
+    }
+    public Task<IReadOnlyList<string>> GetVisibleSitesAsync(CancellationToken ct = default) =>
+        Task.FromResult(_visible);
+    public Task SetVisibleSitesAsync(IReadOnlyList<string> siteIds, CancellationToken ct = default)
+    {
+        _visible = siteIds;
+        return Task.CompletedTask;
+    }
+    public Task<string> GetSiteLastPageAsync(string siteId, CancellationToken ct = default) =>
+        Task.FromResult(LastPages.GetValueOrDefault(siteId, "users"));
+    public Task SetSiteLastPageAsync(string siteId, string pageKey, CancellationToken ct = default)
+    {
+        LastPages[siteId] = pageKey;
+        return Task.CompletedTask;
+    }
+    public Task<IReadOnlyDictionary<string, object?>> GetSiteOptionsAsync(string siteId, CancellationToken ct = default) =>
+        Task.FromResult<IReadOnlyDictionary<string, object?>>(new Dictionary<string, object?>());
+    public Task SetSiteOptionsAsync(string siteId, IReadOnlyDictionary<string, object?> options, CancellationToken ct = default) =>
+        Task.CompletedTask;
+}

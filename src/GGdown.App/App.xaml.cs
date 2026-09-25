@@ -87,7 +87,7 @@ public partial class App : Application
         services.AddTransient<SettingsViewModel>();
         services.AddTransient<ImportViewModel>(); // B4：每次打开对话框取新实例（UserInput/ResultMessage 不串台）
         services.AddTransient<FollowingPickerViewModel>();
-        services.AddSingleton<SiteSwitcherViewModel>();
+        services.AddSingleton<MainNavViewModel>(); // Task 8：主窗口导航 VM（替代 SiteSwitcherViewModel）
         Services = services.BuildServiceProvider();
         try { Services.GetRequiredService<ICurrentSite>().LoadAsync().GetAwaiter().GetResult(); }
         catch (Exception ex) { Log.Error(ex, "加载当前站点失败"); }

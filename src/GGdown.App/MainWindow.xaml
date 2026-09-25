@@ -3,12 +3,11 @@
     xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
     xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
     xmlns:conv="using:GGdown.App.Infrastructure"
-    xmlns:sites="using:GGdown.Sites"
+    xmlns:vm="using:GGdown.ViewModels"
     Title="GGdown">
-    <!-- brief 原写法 Icon="&#xE716;" 在 WinUI3 运行时抛 XamlParseException（无法从裸 glyph 字符串创建 IconElement），
-         改为显式 FontIcon 子元素，glyph 值不变 -->
-    <!-- B8：全局通知行（InfoBar 承载 AccountInvalid 错误 / 任务完成提示），位于 NavigationView 之上，
-         两行 Grid 使 InfoBar 独立于导航视图占顶部一条 -->
+    <!-- Task 8：平台优先壳层——左 48px 平台图标栏 + 顶部页组标签行 + Frame；
+         旧导航视图与标题式站点切换浮出层已移除（MainNavViewModel 驱动）。
+         全局通知行（B8 InfoBar）保留在导航结构之上。 -->
     <Grid>
         <Grid.RowDefinitions>
             <RowDefinition Height="Auto"/>
@@ -19,92 +18,107 @@
                  IsOpen="False"
                  CloseButtonClick="NoticeBar_CloseButtonClick">
             <InfoBar.ActionButton>
-                <!-- 仅错误（登录态失效）通知显示："去设置"导航 SettingsPage；成功通知时 Collapsed -->
+                <!-- 仅错误（登录态失效）通知显示：跳当前平台的设置页；成功通知时 Collapsed -->
                 <Button x:Name="GoSettingsButton" Content="去设置" Click="GoSettingsButton_Click"/>
             </InfoBar.ActionButton>
         </InfoBar>
-        <NavigationView x:Name="Nav"
-                        Grid.Row="1"
-                        IsBackButtonVisible="Collapsed"
-                        IsSettingsVisible="False"
-                        PaneDisplayMode="Left"
-                        OpenPaneLength="200"
-                        SelectionChanged="Nav_SelectionChanged">
-            <NavigationView.MenuItems>
-                <NavigationViewItem Content="用户管理" Tag="users">
-                    <NavigationViewItem.Icon>
-                        <FontIcon Glyph="&#xE716;"/>
-                    </NavigationViewItem.Icon>
-                </NavigationViewItem>
-                <NavigationViewItem Content="下载" Tag="downloads">
-                    <NavigationViewItem.Icon>
-                        <FontIcon Glyph="&#xE896;"/>
-                    </NavigationViewItem.Icon>
-                </NavigationViewItem>
-                <NavigationViewItem Content="历史" Tag="history">
-                    <NavigationViewItem.Icon>
-                        <FontIcon Glyph="&#xE81C;"/>
-                    </NavigationViewItem.Icon>
-                </NavigationViewItem>
-                <NavigationViewItem Content="设置" Tag="settings">
-                    <NavigationViewItem.Icon>
-                        <FontIcon Glyph="&#xE713;"/>
-                    </NavigationViewItem.Icon>
-                </NavigationViewItem>
-            </NavigationView.MenuItems>
+        <Grid Grid.Row="1">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="48"/>
+                <ColumnDefinition Width="*"/>
+            </Grid.ColumnDefinitions>
+            <!-- —— 平台栏 —— -->
             <Grid>
+                <Grid.RowDefinitions>
+                    <RowDefinition Height="*"/>
+                    <RowDefinition Height="Auto"/>
+                    <RowDefinition Height="Auto"/>
+                </Grid.RowDefinitions>
+                <ListView x:Name="PlatformList"
+                          Grid.Row="0"
+                          SelectionMode="Single"
+                          ItemsSource="{x:Bind Nav.Platforms, Mode=OneWay}"
+                          SelectionChanged="PlatformList_SelectionChanged">
+                    <ListView.ItemContainerStyle>
+                        <Style TargetType="ListViewItem">
+                            <Setter Property="HorizontalContentAlignment" Value="Center"/>
+                            <Setter Property="MinHeight" Value="44"/>
+                            <Setter Property="Padding" Value="0"/>
+                            <Setter Property="HorizontalContentAlignment" Value="Center"/>
+                        </Style>
+                    </ListView.ItemContainerStyle>
+                    <ListView.ItemTemplate>
+                        <DataTemplate x:DataType="vm:PlatformItemViewModel">
+                            <StackPanel ToolTipService.ToolTip="{x:Bind DisplayName, Mode=OneWay}" Spacing="2">
+                                <FontIcon Glyph="{x:Bind IconGlyph, Mode=OneWay}" FontSize="20"/>
+                                <!-- 选中态小横条（ListViewItem 自带背景高亮之外的次级指示） -->
+                                <Border Height="2" Width="16" CornerRadius="1"
+                                        HorizontalAlignment="Center"
+                                        Background="{ThemeResource AccentFillColorDefaultBrush}"
+                                        Visibility="{x:Bind conv:UiConv.ToVisibility(IsSelected), Mode=OneWay}"/>
+                            </StackPanel>
+                        </DataTemplate>
+                    </ListView.ItemTemplate>
+                </ListView>
+                <Button x:Name="GlobalDownloadsButton"
+                        Grid.Row="1" Click="GlobalDownloadsButton_Click"
+                        Background="Transparent" BorderThickness="0" Padding="0" MinHeight="44"
+                        ToolTipService.ToolTip="全部平台的下载任务">
+                    <Grid>
+                        <FontIcon Glyph="&#xE896;" FontSize="20"/>
+                        <Border x:Name="ActiveCountBadge"
+                                Visibility="Collapsed"
+                                MinWidth="16" MinHeight="16" CornerRadius="8"
+                                HorizontalAlignment="Right" VerticalAlignment="Top"
+                                Margin="0,-4,-6,0"
+                                Background="{ThemeResource SystemFillColorCriticalBrush}"
+                                Padding="3,1">
+                            <TextBlock x:Name="ActiveCountText" FontSize="10" Foreground="White"
+                                       HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                        </Border>
+                    </Grid>
+                </Button>
+                <Button x:Name="GlobalSettingsButton"
+                        Grid.Row="2" Click="GlobalSettingsButton_Click"
+                        Background="Transparent" BorderThickness="0" Padding="0" MinHeight="44"
+                        ToolTipService.ToolTip="设置">
+                    <FontIcon Glyph="&#xE713;" FontSize="20"/>
+                </Button>
+            </Grid>
+            <!-- —— 内容区：平台名 + 页组标签 + Frame —— -->
+            <Grid Grid.Column="1">
                 <Grid.RowDefinitions>
                     <RowDefinition Height="Auto"/>
                     <RowDefinition Height="*"/>
                 </Grid.RowDefinitions>
-                <!-- 标题式站点切换：避免 PaneHeader 与汉堡按钮挤在同一行的 ComboBox -->
-                <Button Grid.Row="0"
-                        Margin="16,10,16,0"
-                        Padding="8,4"
-                        HorizontalAlignment="Left"
-                        Background="Transparent"
-                        BorderThickness="0">
-                    <StackPanel Orientation="Horizontal" Spacing="8">
-                        <TextBlock Text="{x:Bind SiteSwitcher.SelectedDisplayName, Mode=OneWay}"
-                                   FontSize="20" FontWeight="SemiBold" VerticalAlignment="Center"/>
-                        <FontIcon Glyph="&#xE70D;" FontSize="11" Margin="0,2,0,0" Opacity="0.55"
-                                  VerticalAlignment="Center"/>
-                    </StackPanel>
-                    <Button.Flyout>
-                        <Flyout x:Name="SiteFlyout" Placement="BottomEdgeAlignedLeft">
-                            <ListView x:Name="SiteList"
-                                      Width="268" MaxHeight="420"
-                                      SelectionMode="Single"
-                                      ItemsSource="{x:Bind SiteSwitcher.Sites}"
-                                      SelectedItem="{x:Bind SiteSwitcher.Selected, Mode=TwoWay}"
-                                      SelectionChanged="SiteList_SelectionChanged">
-                                <ListView.ItemContainerStyle>
-                                    <Style TargetType="ListViewItem">
-                                        <Setter Property="HorizontalContentAlignment" Value="Stretch"/>
-                                        <Setter Property="MinHeight" Value="40"/>
-                                        <Setter Property="Padding" Value="12,6"/>
-                                    </Style>
-                                </ListView.ItemContainerStyle>
-                                <ListView.ItemTemplate>
-                                    <DataTemplate x:DataType="sites:SiteInfo">
-                                        <Grid ColumnSpacing="12">
-                                            <Grid.ColumnDefinitions>
-                                                <ColumnDefinition Width="*"/>
-                                                <ColumnDefinition Width="Auto"/>
-                                            </Grid.ColumnDefinitions>
-                                            <TextBlock Text="{x:Bind DisplayName}" VerticalAlignment="Center"/>
-                                            <TextBlock Grid.Column="1" Text="即将支持" FontSize="12" Opacity="0.5"
-                                                       VerticalAlignment="Center"
-                                                       Visibility="{x:Bind conv:UiConv.ToInverseVisibility(Available)}"/>
-                                        </Grid>
-                                    </DataTemplate>
-                                </ListView.ItemTemplate>
-                            </ListView>
-                        </Flyout>
-                    </Button.Flyout>
-                </Button>
+                <StackPanel Orientation="Horizontal" Spacing="16" Margin="12,10,12,0">
+                    <TextBlock x:Name="HeaderTitle" FontSize="20" FontWeight="SemiBold" VerticalAlignment="Center"/>
+                    <!-- 页组标签行：横向单选列表（TabView 容器绑定复杂度高，裁定用 ListView 胶囊行） -->
+                    <ListView x:Name="PageTabs"
+                              SelectionMode="Single"
+                              ItemsSource="{x:Bind Nav.CurrentTabs, Mode=OneWay}"
+                              SelectionChanged="PageTabs_SelectionChanged"
+                              VerticalAlignment="Center">
+                        <ListView.ItemsPanel>
+                            <ItemsPanelTemplate>
+                                <StackPanel Orientation="Horizontal"/>
+                            </ItemsPanelTemplate>
+                        </ListView.ItemsPanel>
+                        <ListView.ItemContainerStyle>
+                            <Style TargetType="ListViewItem">
+                                <Setter Property="MinHeight" Value="32"/>
+                                <Setter Property="Padding" Value="12,4"/>
+                            </Style>
+                        </ListView.ItemContainerStyle>
+                        <ListView.ItemTemplate>
+                            <DataTemplate x:DataType="vm:PageTabViewModel">
+                                <TextBlock Text="{x:Bind Title, Mode=OneWay}" FontSize="14"/>
+                            </DataTemplate>
+                        </ListView.ItemTemplate>
+                    </ListView>
+                </StackPanel>
                 <Frame x:Name="ContentFrame" Grid.Row="1"/>
             </Grid>
-        </NavigationView>
+        </Grid>
     </Grid>
 </Window>
