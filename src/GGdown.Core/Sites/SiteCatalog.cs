@@ -4,9 +4,9 @@ namespace GGdown.Sites;
 
 /// <summary>
 /// UI 站点目录。Available=true 的才接引擎；其余仅展示「即将支持」。
-/// V1 引擎只实现 twitter。
+/// IconGlyph 为 Segoe Fluent Icons 字形（平台栏/界面设置用，蜡笔值可后续微调）。
 /// </summary>
-public sealed record SiteInfo(string SiteId, string DisplayName, bool Available)
+public sealed record SiteInfo(string SiteId, string DisplayName, bool Available, string IconGlyph)
 {
     public string Label => Available ? DisplayName : $"{DisplayName}（即将支持）";
 }
@@ -17,19 +17,19 @@ public static class SiteCatalog
 
     public static IReadOnlyList<SiteInfo> All { get; } =
     [
-        new(TwitterId, "X (Twitter)", true),
-        new("pixiv", "Pixiv", true),
-        new("fanbox", "pixivFANBOX", false),
-        new("danbooru", "Danbooru", false),
-        new("gelbooru", "Gelbooru", false),
-        new("kemono", "Kemono", false),
-        new("coomer", "Coomer", false),
-        new("fantia", "Fantia", false),
-        new("instagram", "Instagram", false),
-        new("reddit", "Reddit", false),
-        new("tumblr", "Tumblr", false),
-        new("bilibili", "哔哩哔哩", false),
-        new("weibo", "微博", false),
+        new(TwitterId, "X (Twitter)", true, ""),
+        new("pixiv", "Pixiv", true, ""),
+        new("fanbox", "pixivFANBOX", false, ""),
+        new("danbooru", "Danbooru", false, ""),
+        new("gelbooru", "Gelbooru", false, ""),
+        new("kemono", "Kemono", false, ""),
+        new("coomer", "Coomer", false, ""),
+        new("fantia", "Fantia", false, ""),
+        new("instagram", "Instagram", false, ""),
+        new("reddit", "Reddit", false, ""),
+        new("tumblr", "Tumblr", false, ""),
+        new("bilibili", "哔哩哔哩", false, ""),
+        new("weibo", "微博", false, ""),
     ];
 
     public static SiteInfo Default => All[0];
