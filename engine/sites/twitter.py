@@ -9,7 +9,7 @@ def make_api(cookies_path):
     from gallery_dl.extractor.twitter import TwitterAPI
     config.set(("extractor", "twitter"), "cookies", cookies_path)
     # URL 中的 handle 无意义：user_following/user_by_screen_name 都显式传入用户名
-    ext = extractor.find("https://x.com/__gallerygui__/following")
+    ext = extractor.find("https://x.com/__ggdown__/following")
     # extractor.cookies 等属性在基类 initialize() 中才创建（idempotent），find() 不会调用
     ext.initialize()
     return TwitterAPI(ext), ext

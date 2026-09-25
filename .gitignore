@@ -15,4 +15,7 @@ cookies.txt
 docs/cookies.txt
 docs/superpowers
 x.md
+# 外部源码快照（gallery-dl / TikTokDownloader 等），不入库
+third_party/
+GGdown.lnk
 

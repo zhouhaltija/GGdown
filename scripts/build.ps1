@@ -21,7 +21,7 @@ if ($LASTEXITCODE -ne 0) { throw "build-engine 失败" }
 
 # 2. 应用发布
 Write-Host "==> dotnet publish"
-dotnet publish (Join-Path $RepoRoot "src\GalleryGUI.App\GalleryGUI.App.csproj") `
+dotnet publish (Join-Path $RepoRoot "src\GGdown.App\GGdown.App.csproj") `
     -c Release -r win-x64 --self-contained true -o (Join-Path $DistDir "app")
 if ($LASTEXITCODE -ne 0) { throw "dotnet publish 失败" }
 
@@ -43,9 +43,9 @@ $iscc = @(
 if (-not $iscc) { throw "未找到 ISCC.exe，请先安装 Inno Setup" }
 
 Write-Host "==> ISCC 编译安装包"
-& $iscc "/DAppVersion=$AppVersion" "/DRepoRoot=$RepoRoot" (Join-Path $RepoRoot "installer\gallerygui.iss")
+& $iscc "/DAppVersion=$AppVersion" "/DRepoRoot=$RepoRoot" (Join-Path $RepoRoot "installer\ggdown.iss")
 if ($LASTEXITCODE -ne 0) { throw "ISCC 编译失败" }
 
-Get-ChildItem (Join-Path $DistDir "GalleryGUI-Setup-*.exe") | ForEach-Object {
+Get-ChildItem (Join-Path $DistDir "GGdown-Setup-*.exe") | ForEach-Object {
     Write-Host ("==> 产物: {0} ({1:N1} MB)" -f $_.FullName, ($_.Length / 1MB))
 }

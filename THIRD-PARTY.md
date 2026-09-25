@@ -1,6 +1,6 @@
 # Third-Party Components
 
-GalleryGUI bundles the following third-party components. Their sources and
+GGdown bundles the following third-party components. Their sources and
 licenses are reproduced below / shipped alongside.
 
 ## gallery-dl
@@ -19,7 +19,7 @@ licenses are reproduced below / shipped alongside.
 - License: Python Software Foundation License (PSF-2.0).
   https://docs.python.org/3/license.html
 
-## GalleryGUI
+## GGdown
 
 - License: GNU General Public License v3.0 (GPL-3.0). Full text shipped as
   `licenses/LICENSE` in the installed application and in the repository root.

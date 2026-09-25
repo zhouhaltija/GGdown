@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""GalleryGUI 引擎适配器。stdout 输出 JSONL 事件（协议 v1），诊断走 stderr。"""
+"""GGdown 引擎适配器。stdout 输出 JSONL 事件（协议 v1），诊断走 stderr。"""
 import argparse
 import json
 import logging

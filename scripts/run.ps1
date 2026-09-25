@@ -1,4 +1,4 @@
-# 开发期启动：编译 Debug 并打开 GalleryGUI.exe（不打安装包）
+# 开发期启动：编译 Debug 并打开 GGdown.exe（不打安装包）
 # DEBUG 构建会用仓库 engine\runner.py + 本机 PATH 上的 python。
 [CmdletBinding()]
 param(
@@ -9,8 +9,8 @@ Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 
 $RepoRoot = [System.IO.Path]::GetFullPath((Join-Path $PSScriptRoot ".."))
-$Proj = Join-Path $RepoRoot "src\GalleryGUI.App\GalleryGUI.App.csproj"
-$Exe = Join-Path $RepoRoot "src\GalleryGUI.App\bin\x64\Debug\net8.0-windows10.0.22621.0\GalleryGUI.exe"
+$Proj = Join-Path $RepoRoot "src\GGdown.App\GGdown.App.csproj"
+$Exe = Join-Path $RepoRoot "src\GGdown.App\bin\x64\Debug\net8.0-windows10.0.22621.0\GGdown.exe"
 
 # SOCKS 代理需要 PySocks；系统 Python 默认没有
 python -c "import socks" 2>$null
