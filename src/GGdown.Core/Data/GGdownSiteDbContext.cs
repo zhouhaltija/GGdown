@@ -2,14 +2,18 @@ using Microsoft.EntityFrameworkCore;
 
 namespace GGdown.Data;
 
-public sealed class GGdownDbContext(DbContextOptions<GGdownDbContext> options) : DbContext(options)
+/// <summary>
+/// 平台库：用户/账号/任务/文件/关注缓存/站点选项。
+/// 索引与导航沿用旧 GGdownDbContext 的同名配置；SiteId 列在此 context 才映射（旧库无此列，旧 context 忽略）。
+/// </summary>
+public sealed class GGdownSiteDbContext(DbContextOptions<GGdownSiteDbContext> options) : DbContext(options)
 {
     public DbSet<Account> Accounts => Set<Account>();
     public DbSet<User> Users => Set<User>();
     public DbSet<DownloadJob> Jobs => Set<DownloadJob>();
     public DbSet<DownloadFile> Files => Set<DownloadFile>();
-    public DbSet<SettingEntry> Settings => Set<SettingEntry>();
     public DbSet<FollowingCacheEntry> FollowingCache => Set<FollowingCacheEntry>();
+    public DbSet<SiteSettingEntry> SiteSettings => Set<SiteSettingEntry>();
 
     protected override void OnModelCreating(ModelBuilder b)
     {
@@ -26,26 +30,30 @@ public sealed class GGdownDbContext(DbContextOptions<GGdownDbContext> options) :
         });
         b.Entity<DownloadJob>(e =>
         {
-            // 旧库无 SiteId 列（拆分迁移只读不写旧库），显式忽略以防误映射
-            e.Ignore(j => j.SiteId);
+            e.Property(j => j.SiteId).IsRequired();
+            e.HasIndex(j => j.SiteId); // 跨库恢复/站点筛选的主路径
             e.HasIndex(j => j.Status);
             e.HasOne<Account>().WithMany().HasForeignKey(j => j.AccountId);
             e.HasOne<User>().WithMany().HasForeignKey(j => j.UserId);
         });
         b.Entity<DownloadFile>(e =>
         {
-            // 旧库无 SiteId 列（同上）
-            e.Ignore(f => f.SiteId);
+            e.Property(f => f.SiteId).IsRequired();
             e.HasIndex(f => f.JobId);
             e.HasIndex(f => f.UserId);
             e.HasOne<DownloadJob>().WithMany(j => j.Files).HasForeignKey(f => f.JobId); // 控制器裁定：双向导航
         });
-        b.Entity<SettingEntry>(e => e.HasKey(s => s.Key));
         b.Entity<FollowingCacheEntry>(e =>
         {
             e.ToTable("FollowingCache");
             e.HasIndex(x => new { x.SiteId, x.RestId }).IsUnique();
             e.HasIndex(x => new { x.SiteId, x.SortOrder });
+        });
+        b.Entity<SiteSettingEntry>(e =>
+        {
+            e.HasKey(s => new { s.SiteId, s.Key });
+            e.Property(s => s.SiteId).IsRequired();
+            e.Property(s => s.Key).IsRequired();
         });
     }
 }

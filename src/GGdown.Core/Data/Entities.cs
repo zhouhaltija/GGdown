@@ -52,6 +52,8 @@ public sealed class User
 public sealed class DownloadJob
 {
     public long Id { get; set; }
+    // 拆库后显式携带归属（UserId 可空不能作归属依据）；旧 GGdownDbContext 忽略该列
+    public string SiteId { get; set; } = string.Empty;
     public long AccountId { get; set; }
     public TargetKind TargetKind { get; set; }
     public long? UserId { get; set; }
@@ -70,6 +72,8 @@ public sealed class DownloadJob
 public sealed class DownloadFile
 {
     public long Id { get; set; }
+    // 与所属 Job 同站点（经 JobId 回填）；旧 GGdownDbContext 忽略该列
+    public string SiteId { get; set; } = string.Empty;
     public long JobId { get; set; }
     public long? UserId { get; set; }
     public string? SourceItemId { get; set; }
@@ -81,6 +85,14 @@ public sealed class DownloadFile
 }
 
 public sealed class SettingEntry { public required string Key { get; set; } public string? Value { get; set; } }
+
+/// <summary>平台库内的站点选项行（从全局库 site.&lt;id&gt;.options 键迁入）；复合主键 (SiteId, Key)。</summary>
+public sealed class SiteSettingEntry
+{
+    public string SiteId { get; set; } = string.Empty;
+    public string Key { get; set; } = string.Empty;
+    public string? Value { get; set; }
+}
 
 public sealed class FollowingCacheEntry
 {
