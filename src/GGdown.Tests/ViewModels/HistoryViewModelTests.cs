@@ -46,11 +46,11 @@ public class HistoryViewModelTests : IDisposable
         _jobId = job.Id;
         _db.Files.AddRange(
             new DownloadFile
-            { JobId = _jobId, UserId = _alice.Id, SourceItemId = "11", Url = "u", FilePath = @"C:\dl\alice\11_1.jpg", FileSize = 100, Status = FileStatus.Downloaded, CreatedAt = new DateTime(2026, 8, 10, 12, 0, 0) },
+            { JobId = _jobId, SiteId = "twitter", UserId = _alice.Id, SourceItemId = "11", Url = "u", FilePath = @"C:\dl\alice\11_1.jpg", FileSize = 100, Status = FileStatus.Downloaded, CreatedAt = new DateTime(2026, 8, 10, 12, 0, 0) },
             new DownloadFile
-            { JobId = _jobId, UserId = _bob.Id, SourceItemId = "22", Url = "u", FilePath = @"C:\dl\bob\22_1.mp4", FileSize = 1536, Status = FileStatus.Skipped, CreatedAt = new DateTime(2026, 8, 11, 12, 0, 0) },
+            { JobId = _jobId, SiteId = "twitter", UserId = _bob.Id, SourceItemId = "22", Url = "u", FilePath = @"C:\dl\bob\22_1.mp4", FileSize = 1536, Status = FileStatus.Skipped, CreatedAt = new DateTime(2026, 8, 11, 12, 0, 0) },
             new DownloadFile
-            { JobId = _jobId, UserId = null, SourceItemId = null, Url = "u", FilePath = @"C:\dl\_likes\1.jpg", FileSize = null, Status = FileStatus.Failed, CreatedAt = new DateTime(2026, 8, 12, 12, 0, 0) });
+            { JobId = _jobId, SiteId = "twitter", UserId = null, SourceItemId = null, Url = "u", FilePath = @"C:\dl\_likes\1.jpg", FileSize = null, Status = FileStatus.Failed, CreatedAt = new DateTime(2026, 8, 12, 12, 0, 0) });
         _db.SaveChanges();
         var sites = new SiteRegistry([new TwitterSiteProvider()]);
         _vm = new HistoryViewModel(new HistoryQueryService(new SingleSiteDbContextFactory(_db, "twitter")), new SyncDispatcher(),
@@ -196,7 +196,7 @@ public class HistoryViewModelTests : IDisposable
     {
         var missing = Path.Combine(Path.GetTempPath(), "ggui-missing-" + Guid.NewGuid().ToString("N") + ".jpg");
         _db.Files.Add(new DownloadFile
-        { JobId = _jobId, UserId = _alice.Id, SourceItemId = "33", Url = "u", FilePath = missing, FileSize = 5 * 1024 * 1024, Status = FileStatus.Downloaded, CreatedAt = new DateTime(2026, 8, 13, 12, 0, 0) });
+        { JobId = _jobId, SiteId = "twitter", UserId = _alice.Id, SourceItemId = "33", Url = "u", FilePath = missing, FileSize = 5 * 1024 * 1024, Status = FileStatus.Downloaded, CreatedAt = new DateTime(2026, 8, 13, 12, 0, 0) });
         await _db.SaveChangesAsync();
 
         await _vm.RefreshCommand.ExecuteAsync(null);
@@ -217,5 +217,27 @@ public class HistoryViewModelTests : IDisposable
             if (Environment.TickCount - start > timeoutMs) throw new TimeoutException("条件等待超时");
             await Task.Delay(20);
         }
+    }
+
+    // ---- Task 10：历史按当前平台筛选（同库混播两站数据） ----
+
+    [Fact]
+    public async Task Refresh_scopes_rows_to_current_site()
+    {
+        var pixivAccount = new Account
+        { SiteId = "pixiv", CookiePath = "p", Status = AccountStatus.Ok, IsActive = true, AddedAt = DateTime.UtcNow };
+        _db.Accounts.Add(pixivAccount);
+        _db.SaveChanges(); // 先落账号取真实 Id（SQLite 不在 Add 时分配临时键值）
+        var pixivJob = new DownloadJob
+        { SiteId = "pixiv", AccountId = pixivAccount.Id, TargetKind = TargetKind.UserMedia, Status = JobStatus.Completed, CreatedAt = DateTime.UtcNow };
+        _db.Jobs.Add(pixivJob);
+        _db.SaveChanges();
+        _db.Files.Add(new DownloadFile
+        { JobId = pixivJob.Id, SiteId = "pixiv", UserId = null, SourceItemId = "p1", Url = "u", FilePath = @"C:\dl\pixiv\p1.jpg", FileSize = 5, Status = FileStatus.Downloaded, CreatedAt = new DateTime(2026, 8, 13, 12, 0, 0) });
+        _db.SaveChanges();
+
+        await _vm.RefreshCommand.ExecuteAsync(null);
+        Assert.Equal(3, _vm.Rows.Count); // twitter 三行（alice/bob/likes），pixiv 行不出现
+        Assert.DoesNotContain(_vm.Rows, r => r.FileName == "p1.jpg");
     }
 }

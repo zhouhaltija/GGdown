@@ -39,6 +39,10 @@ public partial class MainNavViewModel(ICurrentSite current, IAppSettings setting
     [ObservableProperty]
     private int _activeDownloadCount;
 
+    /// <summary>栏底「全部下载」入口的全局视图开关（Task 10）：选平台/进全局设置时复位。</summary>
+    [ObservableProperty]
+    private bool _isGlobalDownloads;
+
     /// <summary>平台页组标签点击 → MainWindow 导航到对应平台页。</summary>
     public event Action<SitePageKey>? TabNavigationRequested;
 
@@ -82,6 +86,7 @@ public partial class MainNavViewModel(ICurrentSite current, IAppSettings setting
 
     private async Task SelectPlatformInternalAsync(string siteId)
     {
+        IsGlobalDownloads = false; // 平台页组导航复位全局下载视图
         if (current.SiteId != siteId) await current.SelectAsync(siteId);
         await settings.SetCurrentSiteIdAsync(siteId);
         foreach (var p in Platforms) p.IsSelected = p.SiteId == siteId;
@@ -98,6 +103,7 @@ public partial class MainNavViewModel(ICurrentSite current, IAppSettings setting
 
     public Task EnterGlobalSettingsAsync()
     {
+        IsGlobalDownloads = false;
         IsGlobalSettings = true;
         foreach (var p in Platforms) p.IsSelected = false;
         CurrentTabs.Clear();

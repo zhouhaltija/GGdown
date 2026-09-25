@@ -136,6 +136,23 @@ public partial class DownloadsViewModel : ObservableObject
 
     private string SiteId => _currentSite.SiteId;
 
+    /// <summary>全局下载视图（栏底入口进入）：true 显示全部平台任务，false 只显示当前平台（Task 10）。</summary>
+    public bool IsGlobalView { get; private set; }
+
+    /// <summary>当前生效的站点筛选：null=全部平台（全局视图）。</summary>
+    private string? SiteFilter => IsGlobalView ? null : SiteId;
+
+    private bool MatchesFilter(JobSnapshot s) =>
+        SiteFilter is null || string.Equals(s.SiteId, SiteFilter, StringComparison.OrdinalIgnoreCase);
+
+    /// <summary>页面 OnNavigatedTo 同步全局视图开关（栏底「全部下载」入口置位，平台页组导航复位）。</summary>
+    public void SetGlobalView(bool value)
+    {
+        if (IsGlobalView == value) return;
+        IsGlobalView = value;
+        _dispatcher.Post(RebuildVisibleJobs);
+    }
+
     public DownloadsViewModel(IDownloadQueueService queue, IAccountQueryService accountQuery,
         IAppSettings settings, IUiDispatcher dispatcher, ICurrentSite currentSite, SiteRegistry sites)
     {
@@ -251,8 +268,7 @@ public partial class DownloadsViewModel : ObservableObject
 
     private void RebuildVisibleJobs()
     {
-        var mine = _queue.Active.Where(s =>
-            string.Equals(s.SiteId, SiteId, StringComparison.OrdinalIgnoreCase)).ToList();
+        var mine = _queue.Active.Where(MatchesFilter).ToList();
         var ids = mine.Select(s => s.JobId).ToHashSet();
         for (var i = Jobs.Count - 1; i >= 0; i--)
         {
@@ -267,7 +283,7 @@ public partial class DownloadsViewModel : ObservableObject
 
     private void AddOrUpdateCard(JobSnapshot snapshot)
     {
-        if (!string.Equals(snapshot.SiteId, SiteId, StringComparison.OrdinalIgnoreCase))
+        if (!MatchesFilter(snapshot))
         {
             if (Jobs.FirstOrDefault(c => c.JobId == snapshot.JobId) is { } stray)
             {

@@ -168,8 +168,8 @@ public partial class HistoryViewModel : ObservableObject
         try
         {
             var gen = ++_refreshId;
-            // Task 4：HistoryFilter 增 SiteId 首参（Task 10 接当前平台筛选，暂传 null=全部）
-            var filter = new HistoryFilter(null, SelectedUserFilter?.Id, FromDate?.Date, ToDate?.Date.AddDays(1));
+            // Task 10：历史按当前平台筛选（平台页组内只见本站记录）
+            var filter = new HistoryFilter(SiteId, SelectedUserFilter?.Id, FromDate?.Date, ToDate?.Date.AddDays(1));
             var list = await _history.ListAsync(filter);
             _dispatcher.Post(() =>
             {

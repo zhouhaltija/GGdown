@@ -22,6 +22,9 @@ public sealed partial class DownloadsPage : Page
         try
         {
             await App.Readiness; // 控制器裁定 5：等建库+恢复完成后再 Start（async void 包 try/catch，B4 模式）
+            // Task 10：平台页组导航（IsGlobalDownloads=false）复位全局视图；栏底入口进入时置位
+            var nav = App.Current.Services.GetRequiredService<MainNavViewModel>();
+            Vm.SetGlobalView(nav.IsGlobalDownloads);
             Vm.Start();
         }
         catch (Exception ex)

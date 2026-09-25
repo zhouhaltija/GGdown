@@ -31,6 +31,7 @@ public class DownloadsViewModelTests : IDisposable
     private readonly Account _account;
     private readonly User _alice;
     private readonly SingleDbContextFactory _factory;
+    private readonly AppSettings _settings;
 
     public DownloadsViewModelTests()
     {
@@ -45,7 +46,7 @@ public class DownloadsViewModelTests : IDisposable
         _db.Users.Add(_alice);
         _db.SaveChanges();
         var sites = new SiteRegistry([new TwitterSiteProvider()]);
-        var settings = new AppSettings(new SingleGlobalDbContextFactory(_global.Item2), sites, new SiteDbContextFactory(_paths));
+        _settings = new AppSettings(new SingleGlobalDbContextFactory(_global.Item2), sites, new SiteDbContextFactory(_paths));
         _queue = new DownloadQueueService(new SingleSiteDbContextFactory(_db), _engine, new FakeStats(), _paths, sites,
             NullLogger<DownloadQueueService>.Instance);
         _vm = CreateVm(_site);
@@ -264,5 +265,47 @@ public class DownloadsViewModelTests : IDisposable
             if (Environment.TickCount - start > timeoutMs) throw new TimeoutException("条件等待超时");
             await Task.Delay(20);
         }
+    }
+
+    // ---- Task 10：全局下载视图（栏底入口）——平台模式只见本站，全局模式全见 ----
+
+    [Fact]
+    public async Task Global_view_shows_all_site_jobs()
+    {
+        var pixivAccount = new Account
+        { SiteId = "pixiv", CookiePath = "p", RestId = "1", ScreenName = "me", Status = AccountStatus.Ok, IsActive = true, AddedAt = DateTime.UtcNow };
+        var pixivUser = new User
+        { SiteId = "pixiv", RestId = "99", ScreenName = "pico", Source = UserSource.Following, AddedAt = DateTime.UtcNow, UpdatedAt = DateTime.UtcNow };
+        _db.Accounts.Add(pixivAccount);
+        _db.Users.Add(pixivUser);
+        await _db.SaveChangesAsync();
+
+        var sites = new SiteRegistry([new TwitterSiteProvider(), new PixivSiteProvider()]);
+        var queue = new DownloadQueueService(new SingleSiteDbContextFactory(_db), _engine, new FakeStats(), _paths,
+            sites, NullLogger<DownloadQueueService>.Instance);
+        var vm = new DownloadsViewModel(queue, new AccountQueryService(new SingleSiteDbContextFactory(_db)),
+            _settings, new SyncDispatcher(), new FakeCurrentSite(), sites);
+        vm.Start();
+        await WaitUntil(() => vm.HasAccount);
+
+        var gate = new TaskCompletionSource();
+        _engine.OnDownload = async (_, _, _, _) => await gate.Task; // 挂起保持卡片活跃
+        await queue.EnqueueUserMediaAsync(pixivAccount, [pixivUser], @"D:\dl", new Dictionary<string, object?>());
+        await WaitUntil(() => queue.Active.Count == 1);
+
+        // 平台模式（当前 twitter）：pixiv 任务不进卡片
+        await WaitUntil(() => vm.Jobs.Count == 0);
+
+        // 全局模式：全部平台任务可见
+        vm.SetGlobalView(true);
+        await WaitUntil(() => vm.Jobs.Count == 1);
+        Assert.Contains("pico", vm.Jobs[0].Title);
+
+        vm.SetGlobalView(false); // 回平台模式 → 卡片再度隐藏
+        await WaitUntil(() => vm.Jobs.Count == 0);
+
+        gate.SetResult();
+        await WaitUntil(() => queue.Active.Count == 0);
+        vm.Stop();
     }
 }

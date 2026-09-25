@@ -157,9 +157,12 @@ public sealed partial class MainWindow : Window
     private void GlobalSettingsButton_Click(object sender, RoutedEventArgs e) =>
         _ = Nav.EnterGlobalSettingsAsync();
 
-    private void GlobalDownloadsButton_Click(object sender, RoutedEventArgs e) =>
-        // 全局下载视图（Task 10 起带「全部平台」筛选参数；暂先落当前 DownloadsPage）
+    private void GlobalDownloadsButton_Click(object sender, RoutedEventArgs e)
+    {
+        // Task 10：全局下载视图——置位后 DownloadsPage OnNavigatedTo 同步 VM 筛选
+        Nav.IsGlobalDownloads = true;
         Navigate(typeof(DownloadsPage));
+    }
 
     // ---- B8 全局通知 ----
 

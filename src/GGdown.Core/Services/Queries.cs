@@ -92,6 +92,7 @@ public sealed class HistoryQueryService(ISiteDbContextFactory siteFactory) : IHi
             //（实测 InvalidOperationException），按 brief 括号内备选方案改为投影前过滤（语义等价）：
             // UserId 作用于 f.UserId，日期作用于 f.CreatedAt。
             var files = db.Files.AsNoTracking().AsQueryable();
+            if (filter.SiteId is { Length: > 0 } sid) files = files.Where(f => f.SiteId == sid);
             if (filter.UserId is { } uid) files = files.Where(f => f.UserId == uid);
             if (filter.From is { } from) files = files.Where(f => f.CreatedAt >= from);
             if (filter.To is { } to) files = files.Where(f => f.CreatedAt < to);
