@@ -11,17 +11,17 @@ namespace GGdown.Tests.Services;
 
 public class AccountServiceTests : IDisposable
 {
-    private readonly (SqliteConnection, GGdownDbContext) _t;
+    private readonly (SqliteConnection, GGdownSiteDbContext) _t;
     private readonly AppPaths _paths;
     private readonly FakeEngine _engine;
     private readonly AccountService _svc;
 
     public AccountServiceTests()
     {
-        _t = TestDb.Create();
+        _t = TestDb.CreateSite();
         _paths = TestPaths.Create();
         _engine = new FakeEngine();
-        _svc = new AccountService(_t.Item2, _engine, _paths,
+        _svc = new AccountService(new SingleSiteDbContextFactory(_t.Item2), _engine, _paths,
             new SiteRegistry([new TwitterSiteProvider()]),
             NullLogger<AccountService>.Instance);
     }
@@ -68,7 +68,7 @@ public class AccountServiceTests : IDisposable
     [Fact]
     public async Task Import_pixiv_without_refresh_token_fails()
     {
-        var svc = new AccountService(_t.Item2, _engine, _paths,
+        var svc = new AccountService(new SingleSiteDbContextFactory(_t.Item2), _engine, _paths,
             new SiteRegistry([new TwitterSiteProvider(), new PixivSiteProvider()]),
             NullLogger<AccountService>.Instance);
         var result = await svc.ImportCookiesAsync("pixiv", MakeCookiesFile());

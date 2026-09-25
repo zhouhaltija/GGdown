@@ -21,6 +21,15 @@ public static class TestDb
         return (conn, db);
     }
 
+    public static (SqliteConnection Connection, GGdownSiteDbContext Db) CreateSite()
+    {
+        var conn = new SqliteConnection("Data Source=:memory:");
+        conn.Open();
+        var db = new GGdownSiteDbContext(new DbContextOptionsBuilder<GGdownSiteDbContext>().UseSqlite(conn).Options);
+        db.Database.EnsureCreated();
+        return (conn, db);
+    }
+
     public static (SqliteConnection Connection, GGdownGlobalDbContext Db) CreateGlobal()
     {
         var conn = new SqliteConnection("Data Source=:memory:");
@@ -96,8 +105,9 @@ public sealed class FakeEngine : IDownloadEngine
 /// 每次返回共享同一 SqliteConnection 的新上下文：仍落在同一个 :memory: 库上，但被调用方
 /// （StatsAggregator 等）`await using` 后 dispose 的不是测试持有的 _db 实例，_db 保持可用。
 /// </summary>
-public sealed class SingleDbContextFactory(GGdownDbContext db) : IDbContextFactory<GGdownDbContext>
+public sealed class SingleDbContextFactory(DbContext db) : IDbContextFactory<GGdownDbContext>
 {
+    // Task 4 泛化：参数放宽到 DbContext 基类——队列（Task 5 前仍用旧模型）经同一站点库连接建旧上下文
     public GGdownDbContext CreateDbContext() =>
         new(new DbContextOptionsBuilder<GGdownDbContext>().UseSqlite(db.Database.GetDbConnection()).Options);
 }
@@ -136,6 +146,25 @@ public sealed class SingleGlobalDbContextFactory(GGdownGlobalDbContext db) : IDb
 }
 
 /// <summary>
+/// 包装测试共享单连接站点库的 ISiteDbContextFactory（Task 4 起：站点服务均经此取上下文）。
+/// 对任意 siteId 返回共享连接上的新 GGdownSiteDbContext（数据按行内 SiteId 值区分）。
+/// </summary>
+public sealed class SingleSiteDbContextFactory(GGdownSiteDbContext db, params string[] knownSites)
+    : ISiteDbContextFactory
+{
+    private readonly HashSet<string> _sites = new(knownSites, StringComparer.OrdinalIgnoreCase);
+
+    public Task<GGdownSiteDbContext> CreateAsync(string siteId, CancellationToken ct = default)
+    {
+        _sites.Add(siteId);
+        return Task.FromResult(new GGdownSiteDbContext(
+            new DbContextOptionsBuilder<GGdownSiteDbContext>().UseSqlite(db.Database.GetDbConnection()).Options));
+    }
+
+    public IReadOnlyList<string> ExistingSites() => [.. _sites];
+}
+
+/// <summary>
 /// 继承 StatsAggregator、覆写 ApplyJobCompletionAsync 只记录不落库（Task 10 的 DownloadQueueService 测试依赖）。
 /// 空注入 base(null!)：覆写路径不会触碰 factory，安全（brief Step 3 括号说明）。
 /// </summary>
@@ -145,7 +174,7 @@ public sealed class FakeStats : StatsAggregator
 
     public FakeStats() : base(null!) { }
 
-    public override Task ApplyJobCompletionAsync(long jobId, CancellationToken ct = default)
+    public override Task ApplyJobCompletionAsync(long jobId, string siteId, CancellationToken ct = default)
     {
         AppliedJobIds.Add(jobId);
         return Task.CompletedTask;

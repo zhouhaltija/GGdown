@@ -11,7 +11,7 @@ namespace GGdown.Tests.Services;
 
 public class UserServiceTests : IDisposable
 {
-    private readonly (SqliteConnection, GGdownDbContext) _t;
+    private readonly (SqliteConnection, GGdownSiteDbContext) _t;
     private readonly AppPaths _paths = TestPaths.Create();
     private readonly FakeEngine _engine;
     private readonly UserService _svc;
@@ -19,9 +19,9 @@ public class UserServiceTests : IDisposable
 
     public UserServiceTests()
     {
-        _t = TestDb.Create();
+        _t = TestDb.CreateSite();
         _engine = new FakeEngine();
-        _svc = new UserService(_t.Item2, _engine, _paths,
+        _svc = new UserService(new SingleSiteDbContextFactory(_t.Item2), _engine, _paths,
             new SiteRegistry([new TwitterSiteProvider()]),
             NullLogger<UserService>.Instance);
         _account = new Account
@@ -105,7 +105,7 @@ public class UserServiceTests : IDisposable
     {
         var u1 = await _svc.AddUserAsync(_account, "carol");
         var u2 = await _svc.AddUserAsync(_account, "dave");
-        await _svc.RemoveAsync([u1.Id, u2.Id]);
+        await _svc.RemoveAsync("twitter", [u1.Id, u2.Id]);
         Assert.Empty(_t.Item2.Users);
     }
 
@@ -113,7 +113,7 @@ public class UserServiceTests : IDisposable
     public async Task SetPinned_toggles()
     {
         var u = await _svc.AddUserAsync(_account, "carol");
-        await _svc.SetPinnedAsync(u.Id, true);
+        await _svc.SetPinnedAsync("twitter", u.Id, true);
         // 适配：ExecuteUpdate 绕过变更跟踪器，同一 DbContext 的跟踪查询会返回陈旧实例，用 AsNoTracking 读库中真实状态
         Assert.True(_t.Item2.Users.AsNoTracking().Single(x => x.Id == u.Id).IsPinned);
     }
@@ -122,14 +122,14 @@ public class UserServiceTests : IDisposable
     public async Task SetSkipped_toggles_and_import_preserves_flag()
     {
         var u = await _svc.AddUserAsync(_account, "alice");
-        await _svc.SetSkippedAsync([u.Id], true);
+        await _svc.SetSkippedAsync("twitter", [u.Id], true);
         Assert.True(_t.Item2.Users.AsNoTracking().Single(x => x.Id == u.Id).IsSkipped);
 
         await _svc.AddFollowingUsersAsync(_account,
             [new SiteUserInfo(u.RestId, "alice", "Alice", "https://x/a.png")]);
         Assert.True(_t.Item2.Users.AsNoTracking().Single(x => x.RestId == u.RestId).IsSkipped);
 
-        await _svc.SetSkippedAsync([u.Id], false);
+        await _svc.SetSkippedAsync("twitter", [u.Id], false);
         Assert.False(_t.Item2.Users.AsNoTracking().Single(x => x.Id == u.Id).IsSkipped);
     }
 
@@ -137,10 +137,10 @@ public class UserServiceTests : IDisposable
     public async Task SetInDownloadList_toggles_and_skip_removes_from_list()
     {
         var u = await _svc.AddUserAsync(_account, "alice");
-        await _svc.SetInDownloadListAsync([u.Id], true);
+        await _svc.SetInDownloadListAsync("twitter", [u.Id], true);
         Assert.True(_t.Item2.Users.AsNoTracking().Single(x => x.Id == u.Id).InDownloadList);
 
-        await _svc.SetSkippedAsync([u.Id], true);
+        await _svc.SetSkippedAsync("twitter", [u.Id], true);
         Assert.False(_t.Item2.Users.AsNoTracking().Single(x => x.Id == u.Id).InDownloadList);
     }
 
@@ -148,8 +148,8 @@ public class UserServiceTests : IDisposable
     public async Task SetInDownloadList_does_not_add_skipped_user()
     {
         var u = await _svc.AddUserAsync(_account, "alice");
-        await _svc.SetSkippedAsync([u.Id], true);
-        await _svc.SetInDownloadListAsync([u.Id], true);
+        await _svc.SetSkippedAsync("twitter", [u.Id], true);
+        await _svc.SetInDownloadListAsync("twitter", [u.Id], true);
         Assert.False(_t.Item2.Users.AsNoTracking().Single(x => x.Id == u.Id).InDownloadList);
     }
 }

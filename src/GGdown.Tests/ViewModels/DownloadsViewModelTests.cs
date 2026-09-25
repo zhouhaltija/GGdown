@@ -20,11 +20,11 @@ namespace GGdown.Tests.ViewModels;
 /// </summary>
 public class DownloadsViewModelTests : IDisposable
 {
-    private readonly (SqliteConnection, GGdownDbContext) _t;
+    private readonly (SqliteConnection, GGdownSiteDbContext) _t;
     private readonly (SqliteConnection, GGdownGlobalDbContext) _global = TestDb.CreateGlobal();
     private readonly AppPaths _paths = TestPaths.Create();
     private readonly FakeEngine _engine = new();
-    private readonly GGdownDbContext _db;
+    private readonly GGdownSiteDbContext _db;
     private readonly DownloadQueueService _queue;
     private readonly DownloadsViewModel _vm;
     private readonly FakeCurrentSite _site = new();
@@ -34,7 +34,7 @@ public class DownloadsViewModelTests : IDisposable
 
     public DownloadsViewModelTests()
     {
-        _t = TestDb.Create();
+        _t = TestDb.CreateSite();
         _db = _t.Item2;
         _factory = new SingleDbContextFactory(_db);
         _account = new Account
@@ -53,7 +53,7 @@ public class DownloadsViewModelTests : IDisposable
     }
 
     private DownloadsViewModel CreateVm(ICurrentSite site) =>
-        new(_queue, new AccountQueryService(_factory), new AppSettings(new SingleGlobalDbContextFactory(_global.Item2), new SiteRegistry([new TwitterSiteProvider()]), new SiteDbContextFactory(_paths)),
+        new(_queue, new AccountQueryService(new SingleSiteDbContextFactory(_db)), new AppSettings(new SingleGlobalDbContextFactory(_global.Item2), new SiteRegistry([new TwitterSiteProvider()]), new SiteDbContextFactory(_paths)),
             new SyncDispatcher(), site, new SiteRegistry([new TwitterSiteProvider()]));
 
     public void Dispose()

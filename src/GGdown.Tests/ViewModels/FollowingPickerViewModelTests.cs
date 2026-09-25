@@ -13,24 +13,24 @@ namespace GGdown.Tests.ViewModels;
 
 public class FollowingPickerViewModelTests : IDisposable
 {
-    private readonly (SqliteConnection, GGdownDbContext) _t;
+    private readonly (SqliteConnection, GGdownSiteDbContext) _t;
     private readonly AppPaths _paths = TestPaths.Create();
     private readonly FakeEngine _engine = new();
-    private readonly GGdownDbContext _db;
+    private readonly GGdownSiteDbContext _db;
     private readonly FollowingPickerViewModel _vm;
 
     public FollowingPickerViewModelTests()
     {
-        _t = TestDb.Create();
+        _t = TestDb.CreateSite();
         _db = _t.Item2;
         var factory = new SingleDbContextFactory(_db);
         _db.Accounts.Add(new Account
         { SiteId = "twitter", CookiePath = "c", Status = AccountStatus.Ok, IsActive = true, AddedAt = DateTime.UtcNow });
         _db.SaveChanges();
         var sites = new SiteRegistry([new TwitterSiteProvider()]);
-        var userSvc = new UserService(_db, _engine, _paths, sites, NullLogger<UserService>.Instance);
-        _vm = new FollowingPickerViewModel(userSvc, new UserQueryService(factory),
-            new AccountQueryService(factory), new SyncDispatcher(), new FakeCurrentSite());
+        var userSvc = new UserService(new SingleSiteDbContextFactory(_db), _engine, _paths, sites, NullLogger<UserService>.Instance);
+        _vm = new FollowingPickerViewModel(userSvc, new UserQueryService(new SingleSiteDbContextFactory(_db)),
+            new AccountQueryService(new SingleSiteDbContextFactory(_db)), new SyncDispatcher(), new FakeCurrentSite());
         _vm.VisibleItems.CollectionChanged += (_, _) => { };
     }
 
@@ -106,7 +106,7 @@ public class FollowingPickerViewModelTests : IDisposable
     public async Task Load_saves_following_cache()
     {
         Assert.True(await _vm.LoadAsync());
-        var cache = await new UserService(_db, _engine, _paths,
+        var cache = await new UserService(new SingleSiteDbContextFactory(_db), _engine, _paths,
             new SiteRegistry([new TwitterSiteProvider()]),
             NullLogger<UserService>.Instance).GetFollowingCacheAsync(
             _db.Accounts.Single());

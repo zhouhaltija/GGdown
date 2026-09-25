@@ -449,7 +449,7 @@ public partial class UsersViewModel : ObservableObject
         if (ids.Count == 0) return;
         try
         {
-            await _users.RemoveAsync(ids);
+            await _users.RemoveAsync(_currentSite.SiteId, ids);
             StatusMessage = $"已删除 {ids.Count} 个用户";
             await RefreshAsync();
         }
@@ -463,7 +463,7 @@ public partial class UsersViewModel : ObservableObject
     {
         try
         {
-            await _users.RemoveAsync([row.Model.Id]);
+            await _users.RemoveAsync(_currentSite.SiteId, [row.Model.Id]);
             StatusMessage = "已删除 1 个用户";
             await RefreshAsync();
         }
@@ -477,7 +477,7 @@ public partial class UsersViewModel : ObservableObject
     {
         try
         {
-            await _users.SetPinnedAsync(row.Model.Id, !row.Model.IsPinned);
+            await _users.SetPinnedAsync(_currentSite.SiteId, row.Model.Id, !row.Model.IsPinned);
             await RefreshAsync(); // 置顶排序键变更，重建列表
         }
         catch (Exception ex) // 控制器裁定 5（B3 审查授权）：fire-and-forget 路径异常不丢出崩 UI 线程
@@ -490,7 +490,7 @@ public partial class UsersViewModel : ObservableObject
     {
         try
         {
-            await _users.SetSkippedAsync([row.Model.Id], !row.Model.IsSkipped);
+            await _users.SetSkippedAsync(_currentSite.SiteId, [row.Model.Id], !row.Model.IsSkipped);
             await RefreshAsync();
         }
         catch (Exception ex)
@@ -505,7 +505,7 @@ public partial class UsersViewModel : ObservableObject
         if (ids.Count == 0) return;
         try
         {
-            await _users.SetSkippedAsync(ids, skipped);
+            await _users.SetSkippedAsync(_currentSite.SiteId, ids, skipped);
             StatusMessage = skipped ? $"已暂停 {ids.Count} 个用户" : $"已恢复 {ids.Count} 个用户";
             await RefreshAsync();
         }

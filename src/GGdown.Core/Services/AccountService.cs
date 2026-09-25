@@ -19,7 +19,7 @@ public interface IAccountService
 }
 
 public sealed class AccountService(
-    GGdownDbContext db,
+    ISiteDbContextFactory siteFactory,
     IDownloadEngine engine,
     IAppPaths paths,
     SiteRegistry sites,
@@ -45,23 +45,28 @@ public sealed class AccountService(
             await File.WriteAllTextAsync(Path.Combine(Path.GetDirectoryName(target)!, "refresh-token.txt"),
                 refreshToken.Trim(), ct);
 
-        // 每站点仅一个活动账号：先全部停用
-        await db.Accounts
-            .Where(a => a.SiteId == siteId && a.IsActive)
-            .ExecuteUpdateAsync(s => s.SetProperty(a => a.IsActive, false), ct);
-
-        var account = new Account
+        // 每站点仅一个活动账号：先全部停用（Task 4：本方法持一个站点库上下文贯穿导入写入；
+        // 随后的 VerifyAsync 自开上下文，游离实体经 ExecuteUpdate 落库，见其注释）
+        await using (var db = await siteFactory.CreateAsync(siteId, ct))
         {
-            SiteId = siteId,
-            CookiePath = relative,
-            Status = AccountStatus.Unverified,
-            IsActive = true,
-            AddedAt = DateTime.UtcNow,
-        };
-        db.Accounts.Add(account);
-        await db.SaveChangesAsync(ct);
+            await db.Accounts
+                .Where(a => a.SiteId == siteId && a.IsActive)
+                .ExecuteUpdateAsync(s => s.SetProperty(a => a.IsActive, false), ct);
 
-        var verify = await VerifyAsync(account, ct);
+            var account = new Account
+            {
+                SiteId = siteId,
+                CookiePath = relative,
+                Status = AccountStatus.Unverified,
+                IsActive = true,
+                AddedAt = DateTime.UtcNow,
+            };
+            db.Accounts.Add(account);
+            await db.SaveChangesAsync(ct);
+        }
+
+        var imported = await FindByCookieAsync(siteId, relative, ct);
+        var verify = await VerifyAsync(imported!, ct);
         return verify.Ok
             ? new ImportCookiesResult(verify.Account)
             : new ImportCookiesResult(verify.Account, verify.Error);
@@ -69,6 +74,12 @@ public sealed class AccountService(
 
     public async Task<ImportCookiesResult> VerifyAsync(Account account, CancellationToken ct = default)
     {
+        // Task 4：方法内自开站点库上下文（无 scoped 依赖后本服务不再需要 Scoped 生命周期，
+        // 但沿用原注册防 VM 生命周期涟漪）。account 常为游离实体（ImportCookies 的导入路径已
+        // 落库取 Id；查询路径产自 AsNoTracking 上下文）——先 Attach 使 SaveChanges 生效，
+        // 再按 Id ExecuteUpdate 兜底（原 B7 裁定语义）。
+        await using var db = await siteFactory.CreateAsync(account.SiteId, ct);
+        db.Attach(account);
         try
         {
             var who = await engine.WhoAmIAsync(account.SiteId, AbsoluteCookiePath(paths, account), ct);
@@ -107,9 +118,18 @@ public sealed class AccountService(
     public async Task DeleteAsync(Account account, CancellationToken ct = default)
     {
         var dir = Path.GetDirectoryName(AbsoluteCookiePath(paths, account));
+        await using var db = await siteFactory.CreateAsync(account.SiteId, ct);
+        db.Attach(account);
         db.Accounts.Remove(account);
         await db.SaveChangesAsync(ct);
         if (dir is not null && Directory.Exists(dir))
             try { Directory.Delete(dir, true); } catch { /* 尽力清理 */ }
+    }
+
+    private async Task<Account?> FindByCookieAsync(string siteId, string cookiePath, CancellationToken ct = default)
+    {
+        await using var db = await siteFactory.CreateAsync(siteId, ct);
+        return await db.Accounts.AsNoTracking()
+            .SingleOrDefaultAsync(a => a.CookiePath == cookiePath, ct);
     }
 }

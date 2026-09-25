@@ -21,26 +21,26 @@ namespace GGdown.Tests.ViewModels;
 /// </summary>
 public class ImportViewModelTests : IDisposable
 {
-    private readonly (SqliteConnection, GGdownDbContext) _t;
+    private readonly (SqliteConnection, GGdownSiteDbContext) _t;
     private readonly (SqliteConnection, GGdownGlobalDbContext) _global = TestDb.CreateGlobal();
     private readonly AppPaths _paths = TestPaths.Create();
     private readonly FakeEngine _engine = new();
-    private readonly GGdownDbContext _db;
+    private readonly GGdownSiteDbContext _db;
     private readonly ImportViewModel _vm;
 
     public ImportViewModelTests()
     {
-        _t = TestDb.Create();
+        _t = TestDb.CreateSite();
         _db = _t.Item2;
         var factory = new SingleDbContextFactory(_db);
         _db.Accounts.Add(new Account { SiteId = "twitter", CookiePath = "c", Status = AccountStatus.Unverified, IsActive = true, AddedAt = DateTime.UtcNow });
         _db.SaveChanges();
         var sites = new SiteRegistry([new TwitterSiteProvider()]);
-        var accountSvc = new AccountService(_db, _engine, _paths, sites, NullLogger<AccountService>.Instance);
-        var userSvc = new UserService(_db, _engine, _paths, sites, NullLogger<UserService>.Instance);
+        var accountSvc = new AccountService(new SingleSiteDbContextFactory(_db), _engine, _paths, sites, NullLogger<AccountService>.Instance);
+        var userSvc = new UserService(new SingleSiteDbContextFactory(_db), _engine, _paths, sites, NullLogger<UserService>.Instance);
         var settings = new AppSettings(new SingleGlobalDbContextFactory(_global.Item2), sites, new SiteDbContextFactory(_paths));
         var queue = new DownloadQueueService(factory, _engine, new FakeStats(), _paths, sites, NullLogger<DownloadQueueService>.Instance);
-        _vm = new ImportViewModel(accountSvc, userSvc, new AccountQueryService(factory), queue, settings, new SyncDispatcher(), sites, new FakeCurrentSite());
+        _vm = new ImportViewModel(accountSvc, userSvc, new AccountQueryService(new SingleSiteDbContextFactory(_db)), queue, settings, new SyncDispatcher(), sites, new FakeCurrentSite());
     }
     public void Dispose()
     {
@@ -118,9 +118,9 @@ public class ImportViewModelTests : IDisposable
         var settings = new AppSettings(new SingleGlobalDbContextFactory(_global.Item2), sites, new SiteDbContextFactory(_paths));
         var queue = new DownloadQueueService(factory, _engine, new FakeStats(), _paths, sites, NullLogger<DownloadQueueService>.Instance);
         var vm = new ImportViewModel(
-            new AccountService(_db, _engine, _paths, sites, NullLogger<AccountService>.Instance),
-            new UserService(_db, _engine, _paths, sites, NullLogger<UserService>.Instance),
-            new AccountQueryService(factory), queue, settings, new SyncDispatcher(), sites, site);
+            new AccountService(new SingleSiteDbContextFactory(_db), _engine, _paths, sites, NullLogger<AccountService>.Instance),
+            new UserService(new SingleSiteDbContextFactory(_db), _engine, _paths, sites, NullLogger<UserService>.Instance),
+            new AccountQueryService(new SingleSiteDbContextFactory(_db)), queue, settings, new SyncDispatcher(), sites, site);
         var file = Path.Combine(_paths.TempDir, "pixiv-cookies.txt");
         await File.WriteAllTextAsync(file, "# Netscape HTTP Cookie File");
         Assert.False(await vm.ImportCookiesAsync(file));

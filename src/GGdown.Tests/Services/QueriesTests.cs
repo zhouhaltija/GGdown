@@ -7,15 +7,15 @@ namespace GGdown.Tests.Services;
 
 public class QueriesTests : IDisposable
 {
-    private readonly (SqliteConnection, GGdownDbContext) _t;
-    private readonly GGdownDbContext _db;
+    private readonly (SqliteConnection, GGdownSiteDbContext) _t;
+    private readonly GGdownSiteDbContext _db;
     private readonly UserQueryService _users;
     private readonly AccountQueryService _accounts;
     private readonly HistoryQueryService _history;
 
     public QueriesTests()
     {
-        _t = TestDb.Create();
+        _t = TestDb.CreateSite();
         _db = _t.Item2;
         var account = new Account { SiteId = "twitter", CookiePath = "c", Status = AccountStatus.Ok, IsActive = true, AddedAt = DateTime.UtcNow };
         var pinned = NewUser("p1", "alice", isPinned: true, lastDownload: DateTime.UtcNow.AddDays(-1), count: 5);
@@ -32,9 +32,9 @@ public class QueriesTests : IDisposable
             new DownloadFile { JobId = job.Id, UserId = recent.Id, SourceItemId = "11", Url = "u", FilePath = @"D:\dl\bob\11_1.jpg", FileSize = 100, Status = FileStatus.Downloaded, CreatedAt = DateTime.UtcNow },
             new DownloadFile { JobId = job.Id, UserId = null, SourceItemId = null, Url = "u", FilePath = @"D:\dl\_likes\1.jpg", FileSize = 200, Status = FileStatus.Downloaded, CreatedAt = DateTime.UtcNow });
         _db.SaveChanges();
-        _users = new UserQueryService(new SingleDbContextFactory(_db));
-        _accounts = new AccountQueryService(new SingleDbContextFactory(_db));
-        _history = new HistoryQueryService(new SingleDbContextFactory(_db));
+        _users = new UserQueryService(new SingleSiteDbContextFactory(_db));
+        _accounts = new AccountQueryService(new SingleSiteDbContextFactory(_db));
+        _history = new HistoryQueryService(new SingleSiteDbContextFactory(_db, "twitter"));
     }
     public void Dispose() => _t.Item1.Dispose();
 

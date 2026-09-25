@@ -20,11 +20,11 @@ namespace GGdown.Tests.ViewModels;
 /// </summary>
 public class SettingsViewModelTests : IDisposable
 {
-    private readonly (SqliteConnection, GGdownDbContext) _t;
+    private readonly (SqliteConnection, GGdownSiteDbContext) _t;
     private readonly (SqliteConnection, GGdownGlobalDbContext) _global = TestDb.CreateGlobal();
     private readonly AppPaths _paths = TestPaths.Create();
     private readonly FakeEngine _engine = new();
-    private readonly GGdownDbContext _db;
+    private readonly GGdownSiteDbContext _db;
     private readonly AppSettings _settings;
     private readonly DownloadQueueService _queue;
     private readonly SiteRegistry _sites;
@@ -32,7 +32,7 @@ public class SettingsViewModelTests : IDisposable
 
     public SettingsViewModelTests()
     {
-        _t = TestDb.Create();
+        _t = TestDb.CreateSite();
         _db = _t.Item2;
         var factory = new SingleDbContextFactory(_db);
         _db.Accounts.Add(new Account
@@ -44,8 +44,8 @@ public class SettingsViewModelTests : IDisposable
         _sites = new SiteRegistry([new TwitterSiteProvider()]);
         _settings = new AppSettings(new SingleGlobalDbContextFactory(_global.Item2), _sites, new SiteDbContextFactory(_paths));
         _queue = new DownloadQueueService(factory, _engine, new FakeStats(), _paths, _sites, NullLogger<DownloadQueueService>.Instance);
-        var accountSvc = new AccountService(_db, _engine, _paths, _sites, NullLogger<AccountService>.Instance);
-        _vm = new SettingsViewModel(_settings, accountSvc, new AccountQueryService(factory),
+        var accountSvc = new AccountService(new SingleSiteDbContextFactory(_db), _engine, _paths, _sites, NullLogger<AccountService>.Instance);
+        _vm = new SettingsViewModel(_settings, accountSvc, new AccountQueryService(new SingleSiteDbContextFactory(_db)),
             _engine, _queue, _paths, _sites, new SyncDispatcher(), new FakeCurrentSite());
     }
     public void Dispose()
@@ -129,8 +129,8 @@ public class SettingsViewModelTests : IDisposable
         Assert.Equal("socks5h://u:p%40ss@127.0.0.1:1080", saved.ToUrl());
 
         var vm2 = new SettingsViewModel(_settings,
-            new AccountService(_db, _engine, _paths, _sites, NullLogger<AccountService>.Instance),
-            new AccountQueryService(new SingleDbContextFactory(_db)),
+            new AccountService(new SingleSiteDbContextFactory(_db), _engine, _paths, _sites, NullLogger<AccountService>.Instance),
+            new AccountQueryService(new SingleSiteDbContextFactory(_db)),
             _engine, _queue, _paths, _sites, new SyncDispatcher(), new FakeCurrentSite());
         await vm2.StartAsync();
         Assert.Equal("socks5h", vm2.ProxyScheme);
@@ -282,8 +282,8 @@ public class SettingsViewModelTests : IDisposable
     {
         var factory = new SingleDbContextFactory(_db);
         var vm = new SettingsViewModel(_settings,
-            new AccountService(_db, _engine, _paths, _sites, NullLogger<AccountService>.Instance),
-            new AccountQueryService(factory),
+            new AccountService(new SingleSiteDbContextFactory(_db), _engine, _paths, _sites, NullLogger<AccountService>.Instance),
+            new AccountQueryService(new SingleSiteDbContextFactory(_db)),
             new HelloErrorEngine(new EngineException("python 未找到")),
             _queue, _paths, _sites, new SyncDispatcher(), new FakeCurrentSite());
         await vm.StartAsync();

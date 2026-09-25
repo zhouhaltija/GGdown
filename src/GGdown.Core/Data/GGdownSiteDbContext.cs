@@ -30,7 +30,7 @@ public sealed class GGdownSiteDbContext(DbContextOptions<GGdownSiteDbContext> op
         });
         b.Entity<DownloadJob>(e =>
         {
-            e.Property(j => j.SiteId).IsRequired();
+            e.Property(j => j.SiteId).IsRequired().HasDefaultValue(""); // 默认空串：同连接上的旧模型插入（队列/测试）不写该列不违约
             e.HasIndex(j => j.SiteId); // 跨库恢复/站点筛选的主路径
             e.HasIndex(j => j.Status);
             e.HasOne<Account>().WithMany().HasForeignKey(j => j.AccountId);
@@ -38,7 +38,7 @@ public sealed class GGdownSiteDbContext(DbContextOptions<GGdownSiteDbContext> op
         });
         b.Entity<DownloadFile>(e =>
         {
-            e.Property(f => f.SiteId).IsRequired();
+            e.Property(f => f.SiteId).IsRequired().HasDefaultValue(""); // 同上
             e.HasIndex(f => f.JobId);
             e.HasIndex(f => f.UserId);
             e.HasOne<DownloadJob>().WithMany(j => j.Files).HasForeignKey(f => f.JobId); // 控制器裁定：双向导航

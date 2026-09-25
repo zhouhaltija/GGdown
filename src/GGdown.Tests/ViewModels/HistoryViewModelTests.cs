@@ -19,8 +19,8 @@ namespace GGdown.Tests.ViewModels;
 /// </summary>
 public class HistoryViewModelTests : IDisposable
 {
-    private readonly (SqliteConnection, GGdownDbContext) _t;
-    private readonly GGdownDbContext _db;
+    private readonly (SqliteConnection, GGdownSiteDbContext) _t;
+    private readonly GGdownSiteDbContext _db;
     private readonly HistoryViewModel _vm;
     private readonly User _alice;
     private readonly User _bob;
@@ -28,9 +28,8 @@ public class HistoryViewModelTests : IDisposable
 
     public HistoryViewModelTests()
     {
-        _t = TestDb.Create();
+        _t = TestDb.CreateSite();
         _db = _t.Item2;
-        var factory = new SingleDbContextFactory(_db);
         var account = new Account
         { SiteId = "twitter", CookiePath = "c", Status = AccountStatus.Ok, IsActive = true, AddedAt = DateTime.UtcNow };
         _alice = new User
@@ -54,8 +53,8 @@ public class HistoryViewModelTests : IDisposable
             { JobId = _jobId, UserId = null, SourceItemId = null, Url = "u", FilePath = @"C:\dl\_likes\1.jpg", FileSize = null, Status = FileStatus.Failed, CreatedAt = new DateTime(2026, 8, 12, 12, 0, 0) });
         _db.SaveChanges();
         var sites = new SiteRegistry([new TwitterSiteProvider()]);
-        _vm = new HistoryViewModel(new HistoryQueryService(factory), new SyncDispatcher(),
-            new AccountQueryService(factory), sites, new FakeCurrentSite());
+        _vm = new HistoryViewModel(new HistoryQueryService(new SingleSiteDbContextFactory(_db, "twitter")), new SyncDispatcher(),
+            new AccountQueryService(new SingleSiteDbContextFactory(_db, "twitter")), sites, new FakeCurrentSite());
     }
 
     public void Dispose()

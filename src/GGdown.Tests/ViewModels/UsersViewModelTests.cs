@@ -14,18 +14,18 @@ namespace GGdown.Tests.ViewModels;
 
 public class UsersViewModelTests : IDisposable
 {
-    private readonly (SqliteConnection, GGdownDbContext) _t;
+    private readonly (SqliteConnection, GGdownSiteDbContext) _t;
     private readonly (SqliteConnection, GGdownGlobalDbContext) _global = TestDb.CreateGlobal();
     private readonly AppPaths _paths = TestPaths.Create();
     private readonly FakeEngine _engine = new();
-    private readonly GGdownDbContext _db;
+    private readonly GGdownSiteDbContext _db;
     private readonly UsersViewModel _vm;
     private readonly Account _account;
     private readonly AppSettings _settings;
 
     public UsersViewModelTests()
     {
-        _t = TestDb.Create();
+        _t = TestDb.CreateSite();
         _db = _t.Item2;
         var factory = new SingleDbContextFactory(_db);
         _account = new Account { SiteId = "twitter", CookiePath = "c", Status = AccountStatus.Ok, IsActive = true, AddedAt = DateTime.UtcNow };
@@ -39,11 +39,11 @@ public class UsersViewModelTests : IDisposable
         // 原文 new AppSettings(new GGdownSettingsStore(_db), sites) 已无法编译
         _settings = new AppSettings(new SingleGlobalDbContextFactory(_global.Item2), sites, new SiteDbContextFactory(_paths));
         var queue = new DownloadQueueService(factory, _engine, new FakeStats(), _paths, sites, NullLogger<DownloadQueueService>.Instance);
-        var accountSvc = new AccountService(_db, _engine, _paths, sites, NullLogger<AccountService>.Instance);
-        var userSvc = new UserService(_db, _engine, _paths, sites, NullLogger<UserService>.Instance);
-        _vm = new UsersViewModel(new UserQueryService(factory), new AccountQueryService(factory),
+        var accountSvc = new AccountService(new SingleSiteDbContextFactory(_db), _engine, _paths, sites, NullLogger<AccountService>.Instance);
+        var userSvc = new UserService(new SingleSiteDbContextFactory(_db), _engine, _paths, sites, NullLogger<UserService>.Instance);
+        _vm = new UsersViewModel(new UserQueryService(new SingleSiteDbContextFactory(_db)), new AccountQueryService(new SingleSiteDbContextFactory(_db)),
             userSvc, queue, _settings, new SyncDispatcher(), sites, new FakeCurrentSite(),
-            new HistoryQueryService(factory));
+            new HistoryQueryService(new SingleSiteDbContextFactory(_db, "twitter", "pixiv")));
         _vm.Users.CollectionChanged += (_, _) => { };
     }
     public void Dispose()
@@ -134,10 +134,10 @@ public class UsersViewModelTests : IDisposable
         var sites = new SiteRegistry([new TwitterSiteProvider()]);
         var settings = new AppSettings(new SingleGlobalDbContextFactory(_global.Item2), sites, new SiteDbContextFactory(_paths));
         var queue = new DownloadQueueService(factory, _engine, new FakeStats(), _paths, sites, NullLogger<DownloadQueueService>.Instance);
-        var vm = new UsersViewModel(new ThrowingUserQuery(), new AccountQueryService(factory),
-            new UserService(_db, _engine, _paths, sites, NullLogger<UserService>.Instance),
+        var vm = new UsersViewModel(new ThrowingUserQuery(), new AccountQueryService(new SingleSiteDbContextFactory(_db)),
+            new UserService(new SingleSiteDbContextFactory(_db), _engine, _paths, sites, NullLogger<UserService>.Instance),
             queue, settings, new SyncDispatcher(), sites, new FakeCurrentSite(),
-            new HistoryQueryService(factory));
+            new HistoryQueryService(new SingleSiteDbContextFactory(_db, "twitter", "pixiv")));
         vm.Users.CollectionChanged += (_, _) => { };
 
         var ex = await Record.ExceptionAsync(() => vm.RefreshCommand.ExecuteAsync(null));
@@ -170,10 +170,10 @@ public class UsersViewModelTests : IDisposable
         var sites = new SiteRegistry([new TwitterSiteProvider()]);
         var settings = new AppSettings(new SingleGlobalDbContextFactory(_global.Item2), sites, new SiteDbContextFactory(_paths));
         var queue = new DownloadQueueService(factory, _engine, new FakeStats(), _paths, sites, NullLogger<DownloadQueueService>.Instance);
-        var vm = new UsersViewModel(new UserQueryService(factory), new AccountQueryService(factory),
-            new UserService(_db, _engine, _paths, sites, NullLogger<UserService>.Instance),
+        var vm = new UsersViewModel(new UserQueryService(new SingleSiteDbContextFactory(_db)), new AccountQueryService(new SingleSiteDbContextFactory(_db)),
+            new UserService(new SingleSiteDbContextFactory(_db), _engine, _paths, sites, NullLogger<UserService>.Instance),
             queue, settings, new SyncDispatcher(), sites, site,
-            new HistoryQueryService(factory));
+            new HistoryQueryService(new SingleSiteDbContextFactory(_db, "twitter", "pixiv")));
         vm.Users.CollectionChanged += (_, _) => { };
         await vm.RefreshCommand.ExecuteAsync(null);
         Assert.True(vm.ShowComingSoon);
@@ -325,10 +325,10 @@ public class UsersViewModelTests : IDisposable
         var settings = new AppSettings(new SingleGlobalDbContextFactory(_global.Item2), sites, new SiteDbContextFactory(_paths));
         var queue = new DownloadQueueService(factory, _engine, new FakeStats(), _paths, sites,
             NullLogger<DownloadQueueService>.Instance);
-        var vm = new UsersViewModel(new UserQueryService(factory), new AccountQueryService(factory),
-            new UserService(_db, _engine, _paths, sites, NullLogger<UserService>.Instance),
+        var vm = new UsersViewModel(new UserQueryService(new SingleSiteDbContextFactory(_db)), new AccountQueryService(new SingleSiteDbContextFactory(_db)),
+            new UserService(new SingleSiteDbContextFactory(_db), _engine, _paths, sites, NullLogger<UserService>.Instance),
             queue, settings, new SyncDispatcher(), sites, site,
-            new HistoryQueryService(factory));
+            new HistoryQueryService(new SingleSiteDbContextFactory(_db, "twitter", "pixiv")));
         vm.Users.CollectionChanged += (_, _) => { };
         await vm.RefreshCommand.ExecuteAsync(null);
         await vm.Users.Single().DownloadCommand.ExecuteAsync(null);
@@ -364,10 +364,10 @@ public class UsersViewModelTests : IDisposable
         });
         var queue = new DownloadQueueService(factory, _engine, new FakeStats(), _paths, sites,
             NullLogger<DownloadQueueService>.Instance);
-        var vm = new UsersViewModel(new UserQueryService(factory), new AccountQueryService(factory),
-            new UserService(_db, _engine, _paths, sites, NullLogger<UserService>.Instance),
+        var vm = new UsersViewModel(new UserQueryService(new SingleSiteDbContextFactory(_db)), new AccountQueryService(new SingleSiteDbContextFactory(_db)),
+            new UserService(new SingleSiteDbContextFactory(_db), _engine, _paths, sites, NullLogger<UserService>.Instance),
             queue, settings, new SyncDispatcher(), sites, site,
-            new HistoryQueryService(factory));
+            new HistoryQueryService(new SingleSiteDbContextFactory(_db, "twitter", "pixiv")));
         vm.Users.CollectionChanged += (_, _) => { };
         await vm.RefreshCommand.ExecuteAsync(null);
         await vm.Users.Single().DownloadCommand.ExecuteAsync(null);

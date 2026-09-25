@@ -352,7 +352,7 @@ public sealed class DownloadQueueService(
         // 审查 Important-4（控制器裁定）：终态一律聚合。规格 §4.2 DownloadCount 定义不限定任务终态，
         // 只排除 Failed 会让认证失效中断的文件永不计数（单向门：重下时 archive 命中只算 Skipped）
         if (status is JobStatus.Completed or JobStatus.Canceled or JobStatus.Failed)
-            await stats.ApplyJobCompletionAsync(item.JobId);
+            await stats.ApplyJobCompletionAsync(item.JobId, item.SiteId);
 
         var snapshot = UpdateSnapshot(item.JobId, status: status, error: error,
             done: done, skipped: skipped, failed: failed, total: job.TotalFiles);
