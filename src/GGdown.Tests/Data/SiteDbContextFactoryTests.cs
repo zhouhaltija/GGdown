@@ -1,0 +1,36 @@
+using GGdown.Data;
+using GGdown.Paths;
+using Microsoft.EntityFrameworkCore;
+
+namespace GGdown.Tests.Data;
+
+public class SiteDbContextFactoryTests : IDisposable
+{
+    private readonly AppPaths _paths = TestPaths.Create();
+
+    [Fact]
+    public async Task CreateAsync_creates_migrates_and_reuses_site_db()
+    {
+        var f = new SiteDbContextFactory(_paths);
+        await using (var db = await f.CreateAsync("twitter"))
+        {
+            Assert.True(File.Exists(Path.Combine(_paths.SitesDataDir, "twitter.db")));
+            db.Users.Add(new User { SiteId = "twitter", RestId = "1", ScreenName = "a" });
+            await db.SaveChangesAsync();
+        }
+        await using (var db2 = await f.CreateAsync("twitter"))
+            Assert.Equal(1, await db2.Users.CountAsync());
+        Assert.Equal(["twitter"], f.ExistingSites());
+    }
+
+    [Fact]
+    public async Task CreateAsync_is_idempotent_across_sites()
+    {
+        var f = new SiteDbContextFactory(_paths);
+        await using var a = await f.CreateAsync("twitter");
+        await using var b = await f.CreateAsync("pixiv");
+        Assert.Equal(["pixiv", "twitter"], f.ExistingSites().OrderBy(x => x).ToArray());
+    }
+
+    public void Dispose() => Directory.Delete(_paths.Root, true);
+}

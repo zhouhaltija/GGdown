@@ -5,6 +5,7 @@ public interface IAppPaths
     string Root { get; }
     string DataDir { get; }
     string DbFile { get; }
+    string SitesDataDir { get; }
     string EngineDir { get; }
     string PythonExe { get; }
     string RunnerScript { get; }

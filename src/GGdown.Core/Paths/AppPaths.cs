@@ -11,6 +11,7 @@ public sealed class AppPaths : IAppPaths
     public string Root { get; }
     public string DataDir => Path.Combine(Root, "data");
     public string DbFile => Path.Combine(DataDir, DataRootMigration.CurrentDbFileName);
+    public string SitesDataDir => Path.Combine(DataDir, "sites");
     public string EngineDir => Path.Combine(Root, "engine");
     public string PythonExe => Path.Combine(EngineDir, "python", "python.exe");
     public string RunnerScript => Path.Combine(EngineDir, "runner.py");
@@ -21,7 +22,7 @@ public sealed class AppPaths : IAppPaths
 
     public void EnsureCreated()
     {
-        foreach (var dir in new[] { DataDir, EngineDir, AccountsDir, ArchiveDir, LogsDir, TempDir })
+        foreach (var dir in new[] { DataDir, SitesDataDir, EngineDir, AccountsDir, ArchiveDir, LogsDir, TempDir })
             Directory.CreateDirectory(dir);
     }
 }
