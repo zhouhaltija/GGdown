@@ -25,6 +25,7 @@ public class HistoryViewModelTests : IDisposable
     private readonly User _alice;
     private readonly User _bob;
     private readonly long _jobId;
+    private readonly FakeCurrentSite _site = new();
 
     public HistoryViewModelTests()
     {
@@ -53,8 +54,8 @@ public class HistoryViewModelTests : IDisposable
             { JobId = _jobId, SiteId = "twitter", UserId = null, SourceItemId = null, Url = "u", FilePath = @"C:\dl\_likes\1.jpg", FileSize = null, Status = FileStatus.Failed, CreatedAt = new DateTime(2026, 8, 12, 12, 0, 0) });
         _db.SaveChanges();
         var sites = new SiteRegistry([new TwitterSiteProvider()]);
-        _vm = new HistoryViewModel(new HistoryQueryService(new SingleSiteDbContextFactory(_db, "twitter")), new SyncDispatcher(),
-            new AccountQueryService(new SingleSiteDbContextFactory(_db, "twitter")), sites, new FakeCurrentSite());
+        _vm = new HistoryViewModel(new HistoryQueryService(new SingleSiteDbContextFactory(_db, "twitter", "pixiv")), new SyncDispatcher(),
+            new AccountQueryService(new SingleSiteDbContextFactory(_db, "twitter", "pixiv")), sites, _site);
     }
 
     public void Dispose()
@@ -239,5 +240,28 @@ public class HistoryViewModelTests : IDisposable
         await _vm.RefreshCommand.ExecuteAsync(null);
         Assert.Equal(3, _vm.Rows.Count); // twitter 三行（alice/bob/likes），pixiv 行不出现
         Assert.DoesNotContain(_vm.Rows, r => r.FileName == "p1.jpg");
+    }
+
+    // ---- Final review Important 3：切平台清空用户筛选并重载筛选下拉（否则旧站 User.Id 打到新站库） ----
+
+    [Fact]
+    public async Task Site_change_clears_user_filter_and_reloads_filter_users()
+    {
+        // 同库播一个 pixiv 用户（FilterUsers 源走 ListUsersAsync(SiteId)）
+        _db.Users.Add(new User
+        { SiteId = "pixiv", RestId = "p1", ScreenName = "pico", Source = UserSource.Manual, AddedAt = DateTime.UtcNow, UpdatedAt = DateTime.UtcNow });
+        _db.SaveChanges();
+
+        await _vm.LoadFilterUsersAsync();
+        Assert.Contains(_vm.FilterUsers, u => u.ScreenName == "alice");
+        _vm.SelectedUserFilter = _vm.FilterUsers.Single(u => u.ScreenName == "alice"); // 旧站筛选
+        await Task.Delay(100); // 筛选变更自动刷新落地
+
+        await _site.SelectAsync("pixiv");
+        await Task.Delay(150); // Changed → 清筛选 + 重载下拉 + 刷新
+
+        Assert.Null(_vm.SelectedUserFilter);                       // 旧站 User 对象不残留
+        Assert.Contains(_vm.FilterUsers, u => u.ScreenName == "pico"); // 下拉重载为新站用户
+        Assert.DoesNotContain(_vm.FilterUsers, u => u.ScreenName == "alice");
     }
 }

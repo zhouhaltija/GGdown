@@ -45,6 +45,15 @@ public class DownloadQueueServiceTests : IDisposable
 
     private static IReadOnlyDictionary<string, object?> Opts() => new Dictionary<string, object?> { ["videos"] = true };
 
+    [Fact]
+    public void Archive_path_is_keyed_by_site_and_account()
+    {
+        // Final review Important 6：拆库后 account Id 仅库内唯一——归档键必须带站点
+        var account = new Account { Id = 1, SiteId = "pixiv", CookiePath = "c" };
+        var path = DownloadQueueService.ArchivePath(_paths, account);
+        Assert.Contains("pixiv-1", Path.GetFileName(path));
+    }
+
     // ---- Task 5：拆库后的归属与跨库恢复 ----
 
     [Fact]
@@ -134,6 +143,7 @@ public class DownloadQueueServiceTests : IDisposable
         Assert.Equal(["https://x.com/alice/media"], plan.Urls);
         Assert.Equal(@"D:\dl", plan.BaseDirectory);
         Assert.EndsWith("cookies.txt", cookies);
+        // Final review Important 6：归档文件按 (siteId, accountId)——拆库后 account Id 仅库内唯一
         Assert.Equal([jobId], _stats.AppliedJobIds);
     }
 

@@ -405,12 +405,12 @@ public class UsersViewModelTests : IDisposable
         await _vm.RefreshCommand.ExecuteAsync(null);
         var alice = _vm.Users[0].Model;
         var job = new DownloadJob
-        { AccountId = _account.Id, TargetKind = TargetKind.UserMedia, UserId = alice.Id, Status = JobStatus.Completed, CreatedAt = DateTime.UtcNow };
+        { SiteId = "twitter", AccountId = _account.Id, TargetKind = TargetKind.UserMedia, UserId = alice.Id, Status = JobStatus.Completed, CreatedAt = DateTime.UtcNow };
         _db.Jobs.Add(job);
         await _db.SaveChangesAsync();
         var missing = Path.Combine(Path.GetTempPath(), "ggui-missing-user-dir-" + Guid.NewGuid().ToString("N"), "a.jpg");
         _db.Files.Add(new DownloadFile
-        { JobId = job.Id, UserId = alice.Id, SourceItemId = "1", Url = "u", FilePath = missing, FileSize = 1, Status = FileStatus.Downloaded, CreatedAt = DateTime.UtcNow });
+        { JobId = job.Id, SiteId = "twitter", UserId = alice.Id, SourceItemId = "1", Url = "u", FilePath = missing, FileSize = 1, Status = FileStatus.Downloaded, CreatedAt = DateTime.UtcNow });
         await _db.SaveChangesAsync();
 
         await _vm.Users[0].OpenFolderCommand.ExecuteAsync(null);
@@ -513,5 +513,32 @@ public class UsersViewModelTests : IDisposable
         await _site.SelectAsync("pixiv"); // 触发 ICurrentSite.Changed → RefreshAsync
         await Task.Delay(100); // 异步刷新落地
         Assert.Equal(["pico"], _vm.Users.Select(r => r.Model.ScreenName).ToArray()); // 切站后无残留
+    }
+
+    // ---- Final review Important 1：打开目录只查当前平台历史（拆库后 user Id 仅库内唯一） ----
+
+    [Fact]
+    public async Task OpenFolder_scopes_history_to_current_site()
+    {
+        await _settings.SetDownloadDirectoryAsync(Path.Combine(_paths.Root, "dl"));
+        await _vm.RefreshCommand.ExecuteAsync(null);
+        var alice = _vm.Users.Single(r => r.Model.ScreenName == "alice");
+
+        // 同库（测试共享连接）播一条 UserId=alice.Id 的 pixiv 文件——拆库前 Id 全局唯一时这是 X 的；
+        // 拆库后两站 Id 空间独立，该行必须不再被 twitter 的"打开目录"看到
+        var pxAccount = new Account
+        { SiteId = "pixiv", CookiePath = "p", Status = AccountStatus.Ok, IsActive = true, AddedAt = DateTime.UtcNow };
+        _db.Accounts.Add(pxAccount);
+        _db.SaveChanges();
+        var pxJob = new DownloadJob
+        { SiteId = "pixiv", AccountId = pxAccount.Id, TargetKind = TargetKind.UserMedia, Status = JobStatus.Completed, CreatedAt = DateTime.UtcNow };
+        _db.Jobs.Add(pxJob);
+        _db.SaveChanges();
+        _db.Files.Add(new DownloadFile
+        { JobId = pxJob.Id, SiteId = "pixiv", UserId = alice.Model.Id, SourceItemId = "1", Url = "u", FilePath = @"D:\dl\pixiv\x.jpg", FileSize = 1, Status = FileStatus.Downloaded, CreatedAt = DateTime.UtcNow });
+        _db.SaveChanges();
+
+        await alice.OpenFolderCommand.ExecuteAsync(null);
+        Assert.Contains("还没有", _vm.StatusMessage); // 只认 twitter 文件：pixiv 行不构成"有记录"
     }
 }

@@ -18,6 +18,12 @@ public class SiteDbContextFactoryTests : IDisposable
             db.Users.Add(new User { SiteId = "twitter", RestId = "1", ScreenName = "a" });
             await db.SaveChangesAsync();
         }
+        // Final review Important 4：站点库走迁移而非 EnsureCreated（后续 schema 变更有前向路径）
+        await using (var hist = await f.CreateAsync("twitter"))
+        {
+            var applied = await hist.Database.GetAppliedMigrationsAsync();
+            Assert.Contains(applied, m => m.Contains("Init"));
+        }
         await using (var db2 = await f.CreateAsync("twitter"))
             Assert.Equal(1, await db2.Users.CountAsync());
         Assert.Equal(["twitter"], f.ExistingSites());

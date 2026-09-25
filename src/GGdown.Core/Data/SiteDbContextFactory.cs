@@ -15,7 +15,8 @@ public interface ISiteDbContextFactory
 
 /// <summary>
 /// 平台库工厂：data\sites\&lt;siteId&gt;.db，每次返回新 context，调用方负责 await using。
-/// 建表用 EnsureCreatedAsync 起步（Task 6 换正式迁移——存量拆分只搬行，不依赖迁移历史）。
+/// 首次访问 MigrateAsync（Migrations/Sites Init）——站点实体后续演进有前向迁移路径
+/// （Final review Important 4：EnsureCreated 对已存在库是 no-op，会让下一处 schema 变更静默失效）。
 /// </summary>
 public sealed class SiteDbContextFactory(IAppPaths paths) : ISiteDbContextFactory
 {
@@ -29,7 +30,7 @@ public sealed class SiteDbContextFactory(IAppPaths paths) : ISiteDbContextFactor
         var db = New(file);
         if (_created.TryAdd(siteId, 0))
         {
-            await db.Database.EnsureCreatedAsync(ct);
+            await db.Database.MigrateAsync(ct);
             await db.Database.ExecuteSqlRawAsync("PRAGMA journal_mode=WAL;", ct);
         }
         return db;

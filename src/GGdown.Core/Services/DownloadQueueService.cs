@@ -77,7 +77,7 @@ public sealed class DownloadQueueService(
         var targetKind = (TargetKind)kind;
         long first = 0;
         var cookieAbs = AccountService.AbsoluteCookiePath(paths, account);
-        var archive = Path.Combine(paths.ArchiveDir, account.Id + ".txt");
+        var archive = ArchivePath(paths, account);
         await using var db = await siteFactory.CreateAsync(account.SiteId, ct);
         foreach (var user in users)
         {
@@ -113,7 +113,7 @@ public sealed class DownloadQueueService(
         // 持久化/快照用 Data.TargetKind，站点计划用 Sites.ContentKind，边界处显式转换（语义一一对应）。
         var targetKind = (TargetKind)kind;
         var cookieAbs = AccountService.AbsoluteCookiePath(paths, account);
-        var archive = Path.Combine(paths.ArchiveDir, account.Id + ".txt");
+        var archive = ArchivePath(paths, account);
         await using var db = await siteFactory.CreateAsync(account.SiteId, ct);
         var job = new DownloadJob
         {
@@ -139,7 +139,7 @@ public sealed class DownloadQueueService(
         if (string.IsNullOrWhiteSpace(url)) throw new ArgumentException("URL 不能为空", nameof(url));
         var targetKind = (TargetKind)kind;
         var cookieAbs = AccountService.AbsoluteCookiePath(paths, account);
-        var archive = Path.Combine(paths.ArchiveDir, account.Id + ".txt");
+        var archive = ArchivePath(paths, account);
         await using var db = await siteFactory.CreateAsync(account.SiteId, ct);
         var job = new DownloadJob
         {
@@ -317,6 +317,11 @@ public sealed class DownloadQueueService(
             lock (_gate) _cancels.Remove(item.JobId, out _);
         }
     }
+
+    /// <summary>归档文件路径（Final review Important 6）：按 (siteId, accountId) 命名——
+    /// 拆库后 account Id 仅在其站点库内唯一，两站 Id 相同不得共享归档（避免跨站「已下载」误跳过）。</summary>
+    public static string ArchivePath(IAppPaths paths, Account account) =>
+        Path.Combine(paths.ArchiveDir, $"{account.SiteId}-{account.Id}.txt");
 
     private async Task InsertFileAsync(long jobId, string siteId, long? userId, EngineEvent ev, FileStatus status, string? itemId)
     {

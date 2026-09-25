@@ -308,4 +308,22 @@ public class DownloadsViewModelTests : IDisposable
         await WaitUntil(() => queue.Active.Count == 0);
         vm.Stop();
     }
+
+    // ---- Final review Important 2：切平台必须复位全局下载视图（否则单平台头下显示全平台任务） ----
+
+    [Fact]
+    public async Task Site_change_resets_global_view()
+    {
+        var site = new FakeCurrentSite();
+        var vm = CreateVm(site);
+        vm.Start();
+        vm.SetGlobalView(true);
+        Assert.True(vm.IsGlobalView);
+
+        await site.SelectAsync("pixiv"); // 平台切换（ICurrentSite.Changed）
+        await Task.Delay(50);            // 异步刷新落地
+
+        Assert.False(vm.IsGlobalView);   // 复位：平台页组内只见本站
+        vm.Stop();
+    }
 }

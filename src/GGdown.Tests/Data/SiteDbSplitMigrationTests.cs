@@ -1,4 +1,5 @@
 using GGdown.Data;
+using Microsoft.Data.Sqlite;
 using GGdown.Paths;
 using GGdown.Services;
 using GGdown.Settings;
@@ -92,5 +93,27 @@ public class SiteDbSplitMigrationTests : IDisposable
     public void Dispose()
     {
         if (Directory.Exists(_paths.Root)) Directory.Delete(_paths.Root, true);
+    }
+
+    [Fact]
+    public async Task Apply_succeeds_when_main_db_has_pooled_connections()
+    {
+        // Final review smoke 复现：启动早期 AppSettings（DI 工厂，默认 Pooling=true）借出并归还的连接
+        // 驻留池中、仍持有主库句柄——不清池则 File.Move 被 Windows 文件锁挡下（拆分静默失败）
+        SeedLegacyDb();
+        using (var conn = new SqliteConnection($"Data Source={_paths.DbFile}"))
+        {
+            conn.Open();
+            using var cmd = conn.CreateCommand();
+            cmd.CommandText = "SELECT COUNT(*) FROM Accounts";
+            cmd.ExecuteScalar(); // 查询后 Dispose：句柄回池不释放
+        }
+
+        await SiteDbSplitMigration.ApplyAsync(_paths);
+
+        Assert.True(File.Exists(Path.Combine(_paths.DataDir, "ggdown.db.pre-split.bak")));
+        var factory = new SiteDbContextFactory(_paths);
+        await using var tw = await factory.CreateAsync("twitter");
+        Assert.Equal(1, await tw.Users.CountAsync());
     }
 }

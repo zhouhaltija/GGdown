@@ -110,7 +110,13 @@ public partial class HistoryViewModel : ObservableObject
         _history = history;
         _dispatcher = dispatcher;
         _currentSite = currentSite;
-        _currentSite.Changed += () => _ = RefreshAsync();
+        // Final review Important 3：切平台先清空旧站 User 筛选（其 Id 对新站库无意义）、重载筛选下拉再刷新
+        _currentSite.Changed += async () =>
+        {
+            SelectedUserFilter = null;
+            await LoadFilterUsersAsync();
+            await RefreshAsync();
+        };
         // accountQuery/sites 按 Produces 契约保留构造签名（当前无消费点：状态链接取 brief 定稿的
         // 字面构造，FilterUsers 走 IHistoryQueryService.ListUsersAsync(SiteId)），故不存储避免 CS0414。
 

@@ -159,8 +159,15 @@ public sealed partial class MainWindow : Window
 
     private void GlobalDownloadsButton_Click(object sender, RoutedEventArgs e)
     {
-        // Task 10：全局下载视图——置位后 DownloadsPage OnNavigatedTo 同步 VM 筛选
+        // Task 10：全局下载视图——置位后 DownloadsPage OnNavigatedTo 同步 VM 筛选；
+        // 已在下载页时 Navigate 短路（同页类型不触发 OnNavigatedTo），直接推 VM（Final review Important 2b）
         Nav.IsGlobalDownloads = true;
+        if (ContentFrame.CurrentSourcePageType == typeof(DownloadsPage))
+        {
+            if (_services.GetRequiredService<DownloadsViewModel>() is { } vm)
+                vm.SetGlobalView(true);
+            return;
+        }
         Navigate(typeof(DownloadsPage));
     }
 

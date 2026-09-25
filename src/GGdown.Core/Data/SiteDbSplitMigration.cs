@@ -123,21 +123,32 @@ public static class SiteDbSplitMigration
             }
         }
 
+        // Final review Important 5：全局键先写入临时全局库，写成功才让位主库——
+        // 原顺序（先改名后写全局键）一旦写库失败，升级路径上用户丢全部全局设置（只剩默认值，.bak 只是人工恢复点）
+        var globalTmp = main + ".global-tmp";
+        if (File.Exists(globalTmp)) File.Delete(globalTmp); // 上次中断的残留：整体重写（SetAsync 幂等，防半成品）
+        await using (var globalDb = new GGdownGlobalDbContext(
+            new DbContextOptionsBuilder<GGdownGlobalDbContext>().UseSqlite($"Data Source={globalTmp};Pooling=False").Options))
+        {
+            await globalDb.Database.MigrateAsync(ct); // 与启动初始化同一路径（EnsureCreated 产物会让 MigrateAsync 报「表已存在」）
+            var store = new GGdownSettingsStore<GGdownGlobalDbContext>(globalDb);
+            foreach (var (key, value) in global)
+                if (value is not null)
+                    await store.SetAsync<string>(key, value, ct);
+        }
+
         legacy.Dispose(); // 释放主库句柄再改名
+        // 清空 ADO.NET 连接池：启动早期 AppSettings/ICurrentSite（DI 工厂默认 Pooling=true）借出并归还的
+        // 连接驻留池中、仍持有主库文件句柄——不清池则 File.Move 被 Windows 文件锁挡下，拆分静默失败
+        // （真机冒烟两次复现：IOException at File.Move；池内无在途连接，全局清池在启动点是安全的）
+        SqliteConnection.ClearAllPools();
         File.Move(main, backup, overwrite: true); // 完成标志：主库让位
         foreach (var suffix in new[] { "-wal", "-shm", "-journal" })
         {
             var sidecar = main + suffix;
             if (File.Exists(sidecar)) File.Delete(sidecar); // checkpoint 后为空壳，随主库让位一并清理
         }
-
-        await using var globalDb = new GGdownGlobalDbContext(
-            new DbContextOptionsBuilder<GGdownGlobalDbContext>().UseSqlite($"Data Source={main};Pooling=False").Options); // 池化句柄锁主库文件，拆分全程禁用
-        await globalDb.Database.MigrateAsync(ct); // 与启动初始化同一路径（EnsureCreated 产物会让 MigrateAsync 报表已存在）
-        var store = new GGdownSettingsStore<GGdownGlobalDbContext>(globalDb);
-        foreach (var (key, value) in global)
-            if (value is not null)
-                await store.SetAsync<string>(key, value, ct);
+        File.Move(globalTmp, main, overwrite: true); // 全局库就位（此前主库始终是事实源）
 
         return new Result(sites.Count, accounts.Count, userTotal, jobTotal, fileTotal, orphans);
     }

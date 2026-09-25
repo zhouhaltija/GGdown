@@ -531,7 +531,7 @@ public partial class UsersViewModel : ObservableObject
     {
         try
         {
-            var files = await _history.ListAsync(new HistoryFilter(UserId: row.Model.Id));
+            var files = await _history.ListAsync(new HistoryFilter(SiteId, row.Model.Id)); // 拆库后 Id 仅库内唯一，必须带站点
             foreach (var file in files)
             {
                 if (string.IsNullOrWhiteSpace(file.FilePath)) continue;

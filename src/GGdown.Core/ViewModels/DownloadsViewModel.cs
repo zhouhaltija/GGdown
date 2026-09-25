@@ -162,7 +162,11 @@ public partial class DownloadsViewModel : ObservableObject
         _dispatcher = dispatcher;
         _currentSite = currentSite;
         _sites = sites;
-        _currentSite.Changed += () => _dispatcher.Post(NotifySite);
+        _currentSite.Changed += () => _dispatcher.Post(() =>
+        {
+            IsGlobalView = false; // 平台切换复位全局下载视图（单平台头下不得显示全平台任务）
+            NotifySite();
+        });
 
         DownloadLikesCommand = new AsyncRelayCommand(() => DownloadAccountContentAsync(ContentKind.AccountLikes));
         DownloadBookmarksCommand = new AsyncRelayCommand(() => DownloadAccountContentAsync(ContentKind.AccountBookmarks));
