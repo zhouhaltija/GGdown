@@ -2,6 +2,9 @@ namespace GGdown.Sites;
 
 public enum SitePageKey { Users, Downloads, History, SiteSettings }
 
+/// <summary>全局设置页组（Task 9）：栏底 ⚙ 进入后内容区顶部的五个标签。</summary>
+public enum GlobalSettingsPageKey { General, Network, Engine, Interface, About }
+
 /// <summary>各平台的功能页组（spec §2.2）：仅 Available 站点的页组会被 UI 实际渲染。</summary>
 public static class SiteUiProfiles
 {

@@ -1,5 +1,6 @@
 using System.IO;
 using GGdown.App.Views;
+using GGdown.App.Views.Settings;
 using GGdown.Data; // JobStatus（B8 通知与徽标计数用）
 using GGdown.Services;
 using GGdown.ViewModels;
@@ -18,8 +19,16 @@ public sealed partial class MainWindow : Window
         [GGdown.Sites.SitePageKey.Users] = typeof(UsersPage),
         [GGdown.Sites.SitePageKey.Downloads] = typeof(DownloadsPage),
         [GGdown.Sites.SitePageKey.History] = typeof(HistoryPage),
-        // Task 9 起换 SiteSettingsPage（账号/站点选项下沉为平台设置页）
-        [GGdown.Sites.SitePageKey.SiteSettings] = typeof(SettingsPage),
+        [GGdown.Sites.SitePageKey.SiteSettings] = typeof(SiteSettingsPage), // Task 9：账号/站点选项下沉为平台设置页
+    };
+
+    private static readonly Dictionary<GGdown.Sites.GlobalSettingsPageKey, Type> GlobalSettingsPages = new()
+    {
+        [GGdown.Sites.GlobalSettingsPageKey.General] = typeof(GeneralSettingsPage),
+        [GGdown.Sites.GlobalSettingsPageKey.Network] = typeof(NetworkSettingsPage),
+        [GGdown.Sites.GlobalSettingsPageKey.Engine] = typeof(EngineSettingsPage),
+        [GGdown.Sites.GlobalSettingsPageKey.Interface] = typeof(InterfaceSettingsPage),
+        [GGdown.Sites.GlobalSettingsPageKey.About] = typeof(AboutPage),
     };
 
     private readonly IServiceProvider _services;
@@ -48,7 +57,8 @@ public sealed partial class MainWindow : Window
 
         // —— Task 8 导航接线：VM 发意图，本类映射页面类型并导航 ——
         Nav.TabNavigationRequested += k => Navigate(SitePages[k]);
-        Nav.GlobalSettingsNavigationRequested += () => Navigate(typeof(SettingsPage)); // Task 9 换全局五页组
+        Nav.GlobalTabNavigationRequested += k => Navigate(GlobalSettingsPages[k]); // Task 9：全局五页
+        Nav.GlobalSettingsNavigationRequested += () => Navigate(typeof(GeneralSettingsPage)); // 进设置默认落通用页
         Nav.PropertyChanged += (_, e) =>
         {
             if (e.PropertyName == nameof(Nav.IsGlobalSettings)) UpdateHeaderTitle();
@@ -84,10 +94,13 @@ public sealed partial class MainWindow : Window
     private void NavigateInitialPage()
     {
         var selectedTab = Nav.CurrentTabs.FirstOrDefault(t => t.IsSelected);
-        if (selectedTab is not null && SitePages.TryGetValue(selectedTab.Key, out var page))
-            Navigate(page);
-        else
-            Navigate(typeof(UsersPage));
+        var page = selectedTab?.Key switch
+        {
+            GGdown.Sites.SitePageKey siteKey when SitePages.TryGetValue(siteKey, out var p) => p,
+            GGdown.Sites.GlobalSettingsPageKey globalKey when GlobalSettingsPages.TryGetValue(globalKey, out var p) => p,
+            _ => typeof(UsersPage),
+        };
+        Navigate(page);
     }
 
     private void UpdateHeaderTitle()
@@ -120,8 +133,17 @@ public sealed partial class MainWindow : Window
 
     private void PageTabs_SelectionChanged(object sender, SelectionChangedEventArgs e)
     {
-        if (PageTabs.SelectedItem is PageTabViewModel tab)
-            _ = Nav.SelectTabAsync(tab.Key); // TabNavigationRequested → Navigate
+        if (PageTabs.SelectedItem is not PageTabViewModel tab) return;
+        // Key 类型区分平台页/全局设置页（页组标签行两模式共用）
+        switch (tab.Key)
+        {
+            case GGdown.Sites.SitePageKey siteKey:
+                _ = Nav.SelectTabAsync(siteKey); // TabNavigationRequested → Navigate
+                break;
+            case GGdown.Sites.GlobalSettingsPageKey globalKey:
+                _ = Nav.SelectGlobalTabAsync(globalKey); // GlobalTabNavigationRequested → Navigate
+                break;
+        }
     }
 
     /// <summary>页组重建后把 ListView 选中项对齐 VM 的 IsSelected。</summary>

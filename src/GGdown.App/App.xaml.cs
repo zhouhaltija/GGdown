@@ -81,10 +81,12 @@ public partial class App : Application
         services.AddTransient<UsersViewModel>();
         services.AddSingleton<DownloadsViewModel>(); // B5：下载页 VM（页面缓存 NavigationCacheMode=Enabled，singleton 保持订阅/退订对称）
         services.AddSingleton<HistoryViewModel>(); // B6：历史页 VM（同上，singleton 保持筛选状态跨导航）
-        // B7：设置页 VM 注册为 Transient（ImportViewModel 先例）——其依赖 IAccountService 是 Scoped，
-        // singleton 会形成 captive dependency（B2 控制器裁定同源）；页面 NavigationCacheMode=Enabled
-        // 且构造函数解析一次，实例与页面同生命周期，语义等同。
-        services.AddTransient<SettingsViewModel>();
+        // Task 9 拆分（B7 captive dependency 裁定沿用）：全局设置 VM 无 Scoped 依赖 → singleton（四页共享）；
+        // 界面设置 VM 依赖 MainNavViewModel/IAppSettings（均 singleton）→ singleton；
+        // 平台设置 VM 依赖 Scoped 的 IAccountService → Transient（页面缓存 + 构造时解析一次，语义等同）。
+        services.AddSingleton<GlobalSettingsViewModel>();
+        services.AddSingleton<InterfaceSettingsViewModel>();
+        services.AddTransient<SiteSettingsViewModel>();
         services.AddTransient<ImportViewModel>(); // B4：每次打开对话框取新实例（UserInput/ResultMessage 不串台）
         services.AddTransient<FollowingPickerViewModel>();
         services.AddSingleton<MainNavViewModel>(); // Task 8：主窗口导航 VM（替代 SiteSwitcherViewModel）

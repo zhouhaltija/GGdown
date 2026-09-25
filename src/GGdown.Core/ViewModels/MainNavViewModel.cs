@@ -21,6 +21,15 @@ public partial class MainNavViewModel(ICurrentSite current, IAppSettings setting
         [SitePageKey.SiteSettings] = "设置",
     };
 
+    private static readonly (GlobalSettingsPageKey Key, string Title)[] GlobalTabs =
+    [
+        (GlobalSettingsPageKey.General, "通用"),
+        (GlobalSettingsPageKey.Network, "网络"),
+        (GlobalSettingsPageKey.Engine, "引擎"),
+        (GlobalSettingsPageKey.Interface, "界面"),
+        (GlobalSettingsPageKey.About, "关于"),
+    ];
+
     public ObservableCollection<PlatformItemViewModel> Platforms { get; } = [];
     public ObservableCollection<PageTabViewModel> CurrentTabs { get; } = [];
 
@@ -30,10 +39,13 @@ public partial class MainNavViewModel(ICurrentSite current, IAppSettings setting
     [ObservableProperty]
     private int _activeDownloadCount;
 
-    /// <summary>页组标签点击 → MainWindow 导航到对应平台页。</summary>
+    /// <summary>平台页组标签点击 → MainWindow 导航到对应平台页。</summary>
     public event Action<SitePageKey>? TabNavigationRequested;
 
-    /// <summary>进入全局设置 → MainWindow 导航到设置区（Task 9 起为五页组）。</summary>
+    /// <summary>全局设置页组标签点击 → MainWindow 导航到对应设置页（Task 9）。</summary>
+    public event Action<GlobalSettingsPageKey>? GlobalTabNavigationRequested;
+
+    /// <summary>进入全局设置（默认落通用页）→ MainWindow 导航。</summary>
     public event Action? GlobalSettingsNavigationRequested;
 
     /// <summary>App.Readiness 放行后的启动入口：载入可见平台并选中当前平台。</summary>
@@ -78,7 +90,7 @@ public partial class MainNavViewModel(ICurrentSite current, IAppSettings setting
 
     public async Task SelectTabAsync(SitePageKey key)
     {
-        foreach (var t in CurrentTabs) t.IsSelected = t.Key == key;
+        foreach (var t in CurrentTabs) t.IsSelected = Equals(t.Key, key);
         if (IsGlobalSettings) return; // 全局设置区的标签由 Task 9 的 GlobalSettingsPageKey 承载
         await settings.SetSiteLastPageAsync(current.SiteId, key.ToString().ToLowerInvariant());
         TabNavigationRequested?.Invoke(key);
@@ -88,7 +100,19 @@ public partial class MainNavViewModel(ICurrentSite current, IAppSettings setting
     {
         IsGlobalSettings = true;
         foreach (var p in Platforms) p.IsSelected = false;
+        CurrentTabs.Clear();
+        foreach (var (key, title) in GlobalTabs)
+            CurrentTabs.Add(new PageTabViewModel(key, title, key == GlobalSettingsPageKey.General));
         GlobalSettingsNavigationRequested?.Invoke();
+        return Task.CompletedTask;
+    }
+
+    /// <summary>全局设置区内切标签（不持久化——全局设置无 lastPage 记忆，spec §2.6 只覆盖平台页）。</summary>
+    public Task SelectGlobalTabAsync(GlobalSettingsPageKey key)
+    {
+        if (!IsGlobalSettings) return Task.CompletedTask;
+        foreach (var t in CurrentTabs) t.IsSelected = Equals(t.Key, key);
+        GlobalTabNavigationRequested?.Invoke(key);
         return Task.CompletedTask;
     }
 
@@ -114,9 +138,13 @@ public partial class PlatformItemViewModel(string siteId, string displayName, st
     private bool _isSelected = isSelected;
 }
 
-public partial class PageTabViewModel(SitePageKey key, string title, bool isSelected) : ObservableObject
+/// <summary>
+/// 页组标签行条目：Key 为 SitePageKey（平台模式）或 GlobalSettingsPageKey（全局设置模式），
+/// 由 MainWindow 按 Key 类型分发导航。
+/// </summary>
+public partial class PageTabViewModel(object key, string title, bool isSelected) : ObservableObject
 {
-    public SitePageKey Key { get; } = key;
+    public object Key { get; } = key;
     public string Title { get; } = title;
 
     [ObservableProperty]
