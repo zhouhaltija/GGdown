@@ -63,14 +63,18 @@ public sealed partial class MainWindow : Window
         {
             if (e.PropertyName == nameof(Nav.IsGlobalSettings)) UpdateHeaderTitle();
         };
-        // Readiness 放行后启动导航（可见平台依赖 ui.visibleSites，首查前库必须就绪）
-        _ = App.Readiness.ContinueWith(_ =>
+        // 全局库就绪即载入侧栏（可见平台依赖 ui.visibleSites）；启动不选平台、不导航，
+        // 用户点击平台后才建页组并进入页面（页面内部再等 App.Readiness）
+        _ = App.GlobalReadiness.ContinueWith(_ =>
         {
             _dispatcherQueue.TryEnqueue(async () =>
             {
-                await Nav.StartAsync();
-                SyncPlatformSelection();
-                NavigateInitialPage();
+                try
+                {
+                    await Nav.StartAsync();
+                    SyncPlatformSelection();
+                }
+                catch (Exception ex) { Serilog.Log.Error(ex, "载入平台栏失败"); }
             });
         }, TaskScheduler.Default);
 
@@ -83,6 +87,18 @@ public sealed partial class MainWindow : Window
     }
 
     // —— Task 8 导航 ——
+
+    private void SidebarToggleButton_Click(object sender, RoutedEventArgs e)
+    {
+        Nav.IsSidebarExpanded = !Nav.IsSidebarExpanded;
+        PlatformRailColumn.Width = new GridLength(Nav.IsSidebarExpanded ? 192 : 72);
+        var labelVisibility = Nav.IsSidebarExpanded ? Visibility.Visible : Visibility.Collapsed;
+        GlobalDownloadsLabel.Visibility = labelVisibility;
+        GlobalSettingsLabel.Visibility = labelVisibility;
+        var label = Nav.IsSidebarExpanded ? "收起侧栏" : "展开侧栏";
+        ToolTipService.SetToolTip(SidebarToggleButton, label);
+        Microsoft.UI.Xaml.Automation.AutomationProperties.SetName(SidebarToggleButton, label);
+    }
 
     private void Navigate(Type pageType)
     {
@@ -107,7 +123,7 @@ public sealed partial class MainWindow : Window
     {
         HeaderTitle.Text = Nav.IsGlobalSettings
             ? "设置"
-            : Nav.Platforms.FirstOrDefault(p => p.IsSelected)?.DisplayName ?? "GGdown";
+            : Nav.Platforms.FirstOrDefault(p => p.IsSelected)?.DisplayName ?? ""; // 未选平台时不显示标题
     }
 
     /// <summary>VM 侧选择变化同步到 PlatformList（用户点击路径由 SelectionChanged 反向驱动，双向各走一条）。</summary>

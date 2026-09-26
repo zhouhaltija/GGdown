@@ -28,6 +28,11 @@ public partial class App : Application
     private static readonly TaskCompletionSource _readyTcs = new();
     public static Task Readiness => _readyTcs.Task;
 
+    // 全局库就绪门：只等全局库迁移 + 当前站点载入，主窗口据此先显示侧栏；
+    // 统计重算/任务恢复（需逐个打开平台库）不阻塞侧栏，页面仍等 Readiness
+    private static readonly TaskCompletionSource _globalReadyTcs = new();
+    public static Task GlobalReadiness => _globalReadyTcs.Task;
+
     public IServiceProvider Services { get; private set; } = null!;
     private MainWindow? _window;
 
@@ -91,8 +96,6 @@ public partial class App : Application
         services.AddTransient<FollowingPickerViewModel>();
         services.AddSingleton<MainNavViewModel>(); // Task 8：主窗口导航 VM（替代 SiteSwitcherViewModel）
         Services = services.BuildServiceProvider();
-        try { Services.GetRequiredService<ICurrentSite>().LoadAsync().GetAwaiter().GetResult(); }
-        catch (Exception ex) { Log.Error(ex, "加载当前站点失败"); }
 
         ApplyDevEngineOverrides();
 
@@ -110,6 +113,10 @@ public partial class App : Application
                 // B1 补充（沿用）：首次触库前先建库/迁移（全局库）；平台库由 ISiteDbContextFactory 惰性建
                 await DbInitializer.InitializeGlobalAsync(
                     scope.ServiceProvider.GetRequiredService<GGdownGlobalDbContext>());
+                // 原先在 UI 线程同步等待（EF 冷启动推迟窗口出现），移到后台、先于全局就绪门
+                try { await Services.GetRequiredService<ICurrentSite>().LoadAsync(); }
+                catch (Exception ex) { Log.Error(ex, "加载当前站点失败"); }
+                _globalReadyTcs.TrySetResult(); // 侧栏可显示
                 await scope.ServiceProvider.GetRequiredService<StatsAggregator>()
                     .RecalculateDownloadCountsAsync();
                 // Global Constraint：启动即应用保存的并发数（此前仅设置页应用，未访问设置页不生效）
@@ -120,7 +127,11 @@ public partial class App : Application
                     .RecoverOnStartupAsync();
             }
             catch (Exception ex) { Log.Error(ex, "启动恢复失败"); }
-            finally { _readyTcs.TrySetResult(); } // 控制器裁定 2：成功失败都放行就绪门
+            finally
+            {
+                _globalReadyTcs.TrySetResult(); // 前序步骤异常时也放行侧栏
+                _readyTcs.TrySetResult();
+            } // 控制器裁定 2：成功失败都放行就绪门
         });
 
         _window = new MainWindow(Services);
@@ -147,7 +158,12 @@ public partial class App : Application
         try
         {
             var bundledEngine = Path.Combine(AppContext.BaseDirectory, "engine");
-            if (File.Exists(paths.PythonExe) || !Directory.Exists(bundledEngine))
+            if (!Directory.Exists(bundledEngine))
+                return;
+
+            var bundledVersion = ReadEngineVersion(bundledEngine);
+            var installedVersion = File.Exists(paths.EngineDir) ? ReadEngineVersion(paths.EngineDir) : null;
+            if (File.Exists(paths.PythonExe) && string.Equals(bundledVersion, installedVersion))
                 return;
 
             Log.Information("首启播种：复制安装目录引擎 {Source} -> {Target}", bundledEngine, paths.EngineDir);
@@ -157,6 +173,19 @@ public partial class App : Application
         catch (Exception ex)
         {
             Log.Error(ex, "首启播种失败（不阻断启动）");
+        }
+    }
+
+    private static string? ReadEngineVersion(string engineDir)
+    {
+        try
+        {
+            var versionFile = Path.Combine(engineDir, "engine.json");
+            return File.Exists(versionFile) ? File.ReadAllText(versionFile) : null;
+        }
+        catch
+        {
+            return null;
         }
     }
 
@@ -178,27 +207,14 @@ public partial class App
 {
     partial void ApplyDevEngineOverrides()
     {
-        var repo = FindRepoRoot(AppContext.BaseDirectory);
+        var repo = DevEngineLocator.FindRepoRoot(AppContext.BaseDirectory);
         if (repo is null) return;
         var opts = Services.GetRequiredService<RunnerEngineOptions>();
-        var paths = Services.GetRequiredService<IAppPaths>();
-        opts.PythonExe = "python";
         opts.RunnerScript = Path.Combine(repo, "engine", "runner.py");
-        // gallery-dl 源码 + 已播种的 site-packages（含 PySocks）。只指源码时系统 Python 没有 socks，
-        // SOCKS5 会报 InvalidSchema: Missing dependencies for SOCKS support。
-        var parts = new List<string> { Path.Combine(repo, "gallery-dl") };
-        var bundled = Path.Combine(paths.EngineDir, "site-packages");
-        if (Directory.Exists(bundled))
-            parts.Add(bundled);
-        opts.GalleryDlPath = string.Join(Path.PathSeparator, parts);
+        // 开发态由 uv 管理固定 Python 和依赖；第三方源码检出不作为 pip 包安装。
+        opts.PythonExe = Path.Combine(repo, "engine", ".venv", "Scripts", "python.exe");
+        opts.GalleryDlPath = Path.Combine(repo, "third_party", "TikTokDownloader");
     }
 
-    private static string? FindRepoRoot(string start)
-    {
-        var dir = new DirectoryInfo(start);
-        while (dir is not null && !File.Exists(Path.Combine(dir.FullName, "gallery-dl", "setup.py")))
-            dir = dir.Parent;
-        return dir?.FullName;
-    }
 }
 #endif

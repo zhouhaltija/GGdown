@@ -105,3 +105,12 @@ public sealed class FollowingCacheEntry
     public int SortOrder { get; set; }
     public DateTime FetchedAt { get; set; }
 }
+
+public sealed class IgnoredFollowingEntry
+{
+    public long Id { get; set; }
+    public string SiteId { get; set; } = string.Empty;
+    public long AccountId { get; set; }
+    public string RestId { get; set; } = string.Empty;
+    public DateTime IgnoredAt { get; set; }
+}

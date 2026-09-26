@@ -13,6 +13,7 @@ public sealed class GGdownSiteDbContext(DbContextOptions<GGdownSiteDbContext> op
     public DbSet<DownloadJob> Jobs => Set<DownloadJob>();
     public DbSet<DownloadFile> Files => Set<DownloadFile>();
     public DbSet<FollowingCacheEntry> FollowingCache => Set<FollowingCacheEntry>();
+    public DbSet<IgnoredFollowingEntry> IgnoredFollowing => Set<IgnoredFollowingEntry>();
     public DbSet<SiteSettingEntry> SiteSettings => Set<SiteSettingEntry>();
 
     protected override void OnModelCreating(ModelBuilder b)
@@ -48,6 +49,13 @@ public sealed class GGdownSiteDbContext(DbContextOptions<GGdownSiteDbContext> op
             e.ToTable("FollowingCache");
             e.HasIndex(x => new { x.SiteId, x.RestId }).IsUnique();
             e.HasIndex(x => new { x.SiteId, x.SortOrder });
+        });
+        b.Entity<IgnoredFollowingEntry>(e =>
+        {
+            e.ToTable("IgnoredFollowing");
+            e.HasIndex(x => new { x.SiteId, x.AccountId, x.RestId }).IsUnique();
+            e.HasOne<Account>().WithMany().HasForeignKey(x => x.AccountId)
+                .OnDelete(DeleteBehavior.Cascade);
         });
         b.Entity<SiteSettingEntry>(e =>
         {

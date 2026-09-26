@@ -84,6 +84,13 @@ def cmd_user_info(args):
 
 
 def cmd_download(args):
+    if args.site == "douyin":
+        site = load_site(args.site)
+        emit_hello()
+        with open(args.job, encoding="utf-8") as f:
+            spec = json.load(f)
+        site.download(args.cookies, spec, emit)
+        return
     from gallery_dl import config, job, output
     from sites import apply_options
     emit_hello()

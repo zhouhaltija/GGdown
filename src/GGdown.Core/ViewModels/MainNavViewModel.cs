@@ -43,6 +43,15 @@ public partial class MainNavViewModel(ICurrentSite current, IAppSettings setting
     [ObservableProperty]
     private bool _isGlobalDownloads;
 
+    [ObservableProperty]
+    private bool _isSidebarExpanded = true;
+
+    partial void OnIsSidebarExpandedChanged(bool value)
+    {
+        foreach (var platform in Platforms)
+            platform.IsSidebarExpanded = value;
+    }
+
     /// <summary>平台页组标签点击 → MainWindow 导航到对应平台页。</summary>
     public event Action<SitePageKey>? TabNavigationRequested;
 
@@ -52,29 +61,31 @@ public partial class MainNavViewModel(ICurrentSite current, IAppSettings setting
     /// <summary>进入全局设置（默认落通用页）→ MainWindow 导航。</summary>
     public event Action? GlobalSettingsNavigationRequested;
 
-    /// <summary>App.Readiness 放行后的启动入口：载入可见平台并选中当前平台。</summary>
-    public async Task StartAsync()
-    {
-        await ReloadVisibleAsync();
-        if (Platforms.Count == 0) return;
-        var selected = Platforms.FirstOrDefault(p => p.SiteId == current.SiteId) ?? Platforms[0];
-        await SelectPlatformInternalAsync(selected.SiteId);
-    }
+    /// <summary>当前选中的平台；null 表示未选平台（启动后尚未点击，或处于全局设置）。</summary>
+    private string? _selectedSiteId;
 
-    /// <summary>界面设置勾选变化后刷新平台栏（当前平台被隐藏时回退到首个可见平台）。</summary>
+    /// <summary>
+    /// 全局库就绪后的启动入口：只载入平台栏，不选中任何平台、不建页组——
+    /// 平台库、页面与首刷推迟到用户点击平台时再做（启动只显示侧栏）。
+    /// </summary>
+    public Task StartAsync() => ReloadVisibleAsync();
+
+    /// <summary>界面设置勾选变化后刷新平台栏（选中的平台被隐藏时回退到首个可见平台）。</summary>
     public async Task ReloadVisibleAsync()
     {
         var visible = (await settings.GetVisibleSitesAsync()).ToHashSet(StringComparer.OrdinalIgnoreCase);
-        var selectedId = current.SiteId;
         Platforms.Clear();
         foreach (var s in SiteCatalog.All.Where(s => s.Available && visible.Contains(s.SiteId)))
-            Platforms.Add(new PlatformItemViewModel(s.SiteId, s.DisplayName, s.IconGlyph, s.SiteId == selectedId));
+            Platforms.Add(new PlatformItemViewModel(s.SiteId, s.DisplayName, s.IconGlyph,
+                s.SiteId == _selectedSiteId, IsSidebarExpanded));
+        if (_selectedSiteId is null) return; // 未选平台：不自动选中，也不动页组（全局设置标签保持）
         if (Platforms.Count == 0)
         {
+            _selectedSiteId = null;
             CurrentTabs.Clear();
             return;
         }
-        if (Platforms.All(p => p.SiteId != selectedId))
+        if (Platforms.All(p => p.SiteId != _selectedSiteId))
             await SelectPlatformInternalAsync(Platforms[0].SiteId);
     }
 
@@ -87,6 +98,7 @@ public partial class MainNavViewModel(ICurrentSite current, IAppSettings setting
     private async Task SelectPlatformInternalAsync(string siteId)
     {
         IsGlobalDownloads = false; // 平台页组导航复位全局下载视图
+        _selectedSiteId = siteId;
         if (current.SiteId != siteId) await current.SelectAsync(siteId);
         await settings.SetCurrentSiteIdAsync(siteId);
         foreach (var p in Platforms) p.IsSelected = p.SiteId == siteId;
@@ -105,6 +117,7 @@ public partial class MainNavViewModel(ICurrentSite current, IAppSettings setting
     {
         IsGlobalDownloads = false;
         IsGlobalSettings = true;
+        _selectedSiteId = null;
         foreach (var p in Platforms) p.IsSelected = false;
         CurrentTabs.Clear();
         foreach (var (key, title) in GlobalTabs)
@@ -133,7 +146,8 @@ public partial class MainNavViewModel(ICurrentSite current, IAppSettings setting
     }
 }
 
-public partial class PlatformItemViewModel(string siteId, string displayName, string iconGlyph, bool isSelected)
+public partial class PlatformItemViewModel(string siteId, string displayName, string iconGlyph,
+    bool isSelected, bool isSidebarExpanded)
     : ObservableObject
 {
     public string SiteId { get; } = siteId;
@@ -142,6 +156,9 @@ public partial class PlatformItemViewModel(string siteId, string displayName, st
 
     [ObservableProperty]
     private bool _isSelected = isSelected;
+
+    [ObservableProperty]
+    private bool _isSidebarExpanded = isSidebarExpanded;
 }
 
 /// <summary>

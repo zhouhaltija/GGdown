@@ -1,4 +1,5 @@
 using GGdown.ViewModels;
+using GGdown.Sites;
 
 namespace GGdown.Tests.ViewModels;
 
@@ -12,8 +13,9 @@ public class InterfaceSettingsViewModelTests
         await nav.StartAsync();
         var vm = new InterfaceSettingsViewModel(settings, nav);
         await vm.StartAsync();
-        Assert.Equal(13, vm.Items.Count);
-        Assert.Equal(2, vm.Items.Count(i => i.Available));
+        Assert.Equal(SiteCatalog.All.Count, vm.Items.Count);
+        Assert.Equal(3, vm.Items.Count(i => i.Available));
+        Assert.Contains(vm.Items, i => i.SiteId == "douyin" && i.Available);
         Assert.All(vm.Items.Where(i => !i.Available), i => Assert.False(i.IsVisible)); // 不可用站点勾选无效
     }
 

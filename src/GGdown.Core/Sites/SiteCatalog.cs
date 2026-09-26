@@ -19,6 +19,7 @@ public static class SiteCatalog
     [
         new(TwitterId, "X (Twitter)", true, ""),
         new("pixiv", "Pixiv", true, ""),
+        new("douyin", "抖音", true, ""),
         new("fanbox", "pixivFANBOX", false, ""),
         new("danbooru", "Danbooru", false, ""),
         new("gelbooru", "Gelbooru", false, ""),

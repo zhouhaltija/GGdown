@@ -18,6 +18,7 @@ public static class SiteUiProfiles
     {
         ["twitter"] = All,
         ["pixiv"] = All,
+        ["douyin"] = All,
         ["danbooru"] = NoUsers,
         ["gelbooru"] = NoUsers,
         ["kemono"] = NoUsers,

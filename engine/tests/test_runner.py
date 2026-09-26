@@ -5,6 +5,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 from sites import apply_proxy_from_env, classify_error, configure_stdio, emit, load_site, parse_screen_name, walk_config
 import pytest
+import json
 
 
 def test_load_site_twitter():
@@ -19,6 +20,32 @@ def test_load_site_pixiv():
     assert hasattr(mod, "whoami")
     assert hasattr(mod, "list_following")
     assert hasattr(mod, "user_info")
+
+
+def test_load_site_douyin():
+    mod = load_site("douyin")
+    assert hasattr(mod, "whoami")
+    assert hasattr(mod, "user_info")
+    assert hasattr(mod, "download")
+
+
+def test_douyin_download_routes_to_site_adapter(tmp_path, monkeypatch):
+    import runner
+    from argparse import Namespace
+
+    job = tmp_path / "job.json"
+    job.write_text(json.dumps({"urls": ["https://www.douyin.com/video/1234567890123456789"]}), encoding="utf-8")
+    calls = []
+
+    class FakeSite:
+        def download(self, cookies, spec, emitter):
+            calls.append((cookies, spec))
+            emitter("job-done", total=0, skipped=0, failed=0)
+
+    monkeypatch.setattr(runner, "load_site", lambda name: FakeSite() if name == "douyin" else None)
+    monkeypatch.setattr(runner, "emit", lambda *args, **kwargs: None)
+    runner.cmd_download(Namespace(site="douyin", cookies="fictional-path", job=str(job)))
+    assert calls == [("fictional-path", {"urls": ["https://www.douyin.com/video/1234567890123456789"]})]
 
 
 def test_load_site_unknown_raises():

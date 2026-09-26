@@ -172,7 +172,7 @@ public partial class UsersViewModel : ObservableObject
         OpenFolderCommand = new AsyncRelayCommand<UserRowViewModel>(OpenFolderCoreAsync);
         ShowAddUserCommand = new RelayCommand(() => ShowAddUserRequested?.Invoke());
         ShowImportCookieCommand = new RelayCommand(() => ShowImportCookieRequested?.Invoke());
-        ShowFollowingListCommand = new RelayCommand(() => ShowFollowingListRequested?.Invoke(), () => _hasAccount && _currentSite.IsAvailable);
+        ShowFollowingListCommand = new RelayCommand(() => ShowFollowingListRequested?.Invoke(), () => CanShowFollowingList);
         SelectAllCommand = new RelayCommand(() => SelectAll(true));
         DeselectAllCommand = new RelayCommand(() => SelectAll(false));
         InvertSelectionCommand = new RelayCommand(InvertSelection);
@@ -188,7 +188,11 @@ public partial class UsersViewModel : ObservableObject
     public int SelectedCount => Users.Count(r => r.IsSelected);
     public bool HasUsers => _hasUsers;
     public bool HasAccount => _hasAccount;               // 驱动空状态引导与导入按钮
-    public bool CanShowFollowingList => _hasAccount && _currentSite.IsAvailable;
+    public bool SupportsFollowingList => _currentSite.IsAvailable && _sites.IsRegistered(SiteId)
+        && _sites.Get(SiteId).SupportedKinds.Contains(ContentKind.UserMedia)
+        && SiteId == TwitterSiteProvider.Id;
+    public bool CanShowFollowingList => _hasAccount && SupportsFollowingList;
+    public bool ShowManualAddGuide => _currentSite.IsAvailable && SiteId == DouyinSiteProvider.Id;
     public bool BottomBarVisible => SelectedCount > 0;
     public bool IsSiteAvailable => _currentSite.IsAvailable;
     public bool ShowComingSoon => !_currentSite.IsAvailable;
@@ -296,6 +300,8 @@ public partial class UsersViewModel : ObservableObject
                 OnPropertyChanged(nameof(HasUsers));
                 OnPropertyChanged(nameof(HasAccount));
                 OnPropertyChanged(nameof(CanShowFollowingList));
+                OnPropertyChanged(nameof(SupportsFollowingList));
+                OnPropertyChanged(nameof(ShowManualAddGuide));
                 OnPropertyChanged(nameof(IsSiteAvailable));
                 OnPropertyChanged(nameof(ShowComingSoon));
                 OnPropertyChanged(nameof(ShowEmptyGuide));

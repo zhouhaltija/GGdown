@@ -14,6 +14,8 @@ public interface IUserService
     Task<IReadOnlyList<SiteUserInfo>> ListFollowingAsync(Account account, CancellationToken ct = default);
     Task<FollowingCacheSnapshot?> GetFollowingCacheAsync(Account account, CancellationToken ct = default);
     Task SaveFollowingCacheAsync(Account account, IReadOnlyList<SiteUserInfo> users, CancellationToken ct = default);
+    Task<IReadOnlySet<string>> GetIgnoredFollowingIdsAsync(Account account, CancellationToken ct = default);
+    Task SetFollowingIgnoredAsync(Account account, string restId, bool ignored, CancellationToken ct = default);
     Task<int> AddFollowingUsersAsync(Account account, IReadOnlyList<SiteUserInfo> selected, CancellationToken ct = default);
     Task<User> AddUserAsync(Account account, string input, CancellationToken ct = default);
     Task<int> RefreshProfilesAsync(Account account, IReadOnlyList<long>? userIds = null, CancellationToken ct = default);
@@ -75,6 +77,38 @@ public sealed class UserService(
         await db.SaveChangesAsync(ct);
     }
 
+    public async Task<IReadOnlySet<string>> GetIgnoredFollowingIdsAsync(Account account, CancellationToken ct = default)
+    {
+        await using var db = await siteFactory.CreateAsync(account.SiteId, ct);
+        var ids = await db.IgnoredFollowing.AsNoTracking()
+            .Where(x => x.SiteId == account.SiteId && x.AccountId == account.Id)
+            .Select(x => x.RestId)
+            .ToListAsync(ct);
+        return ids.ToHashSet(StringComparer.Ordinal);
+    }
+
+    public async Task SetFollowingIgnoredAsync(Account account, string restId, bool ignored,
+        CancellationToken ct = default)
+    {
+        await using var db = await siteFactory.CreateAsync(account.SiteId, ct);
+        var rows = db.IgnoredFollowing.Where(x => x.SiteId == account.SiteId &&
+            x.AccountId == account.Id && x.RestId == restId);
+        if (!ignored)
+        {
+            await rows.ExecuteDeleteAsync(ct);
+            return;
+        }
+        if (await rows.AnyAsync(ct)) return;
+        db.IgnoredFollowing.Add(new IgnoredFollowingEntry
+        {
+            SiteId = account.SiteId,
+            AccountId = account.Id,
+            RestId = restId,
+            IgnoredAt = DateTime.UtcNow,
+        });
+        await db.SaveChangesAsync(ct);
+    }
+
     public async Task<int> AddFollowingUsersAsync(
         Account account, IReadOnlyList<SiteUserInfo> selected, CancellationToken ct = default)
     {
@@ -119,7 +153,10 @@ public sealed class UserService(
         var updated = 0;
         foreach (var user in list)
         {
-            var info = await engine.GetUserInfoAsync(account.SiteId, cookies, user.ScreenName, ct);
+            var input = account.SiteId == DouyinSiteProvider.Id
+                ? provider.BuildProfileUrl(user.ScreenName, user.RestId)
+                : user.ScreenName;
+            var info = await engine.GetUserInfoAsync(account.SiteId, cookies, input, ct);
             await UpsertAsync(db, account, info, user.Source, provider, ct);
             updated++;
         }

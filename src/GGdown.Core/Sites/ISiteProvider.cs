@@ -6,7 +6,7 @@ public enum ContentKind
     UserHighlights, Permalink, Search,
 }
 public enum OptionKind { Boolean, Text, Choice }
-public enum PasteKind { User, Tweet, List, Search }
+public enum PasteKind { User, Tweet, List, Search, Work }
 
 public sealed record UserTarget(long? UserId, string? ScreenName, string? BaseDirectory = null, string? RestId = null, string? DirectUrl = null);
 public sealed record UserInputParseResult(

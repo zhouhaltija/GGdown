@@ -65,6 +65,7 @@ public sealed class FakeEngine : IDownloadEngine
     public Task<EngineHello> HelloAsync(CancellationToken ct = default) => Task.FromResult(Hello);
 
     public string? LastSiteId { get; private set; }
+    public string? LastUserInfoInput { get; private set; }
 
     public Task<AccountInfo> WhoAmIAsync(string siteId, string cookiesFile, CancellationToken ct = default)
     {
@@ -90,6 +91,7 @@ public sealed class FakeEngine : IDownloadEngine
     public Task<SiteUserInfo> GetUserInfoAsync(string siteId, string cookiesFile, string input, CancellationToken ct = default)
     {
         LastSiteId = siteId;
+        LastUserInfoInput = input;
         return Task.FromResult(NextUserInfo);
     }
 

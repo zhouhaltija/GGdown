@@ -1,6 +1,7 @@
 using System.Collections.ObjectModel;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
+using GGdown.Data;
 using GGdown.Engine;
 using GGdown.Services;
 using GGdown.Sites;
@@ -11,17 +12,34 @@ namespace GGdown.ViewModels;
 public sealed partial class FollowingRowViewModel : ObservableObject
 {
     private bool _isSelected;
+    private bool _isIgnored;
 
-    public FollowingRowViewModel(SiteUserInfo info, bool alreadyAdded)
+    public FollowingRowViewModel(SiteUserInfo info, bool alreadyAdded, bool isIgnored,
+        Func<FollowingRowViewModel, Task> toggleIgnore)
     {
         Info = info;
         AlreadyAdded = alreadyAdded;
+        _isIgnored = isIgnored;
         _isSelected = alreadyAdded;
+        ToggleIgnoreCommand = new AsyncRelayCommand(() => toggleIgnore(this));
     }
 
     public SiteUserInfo Info { get; }
     public bool AlreadyAdded { get; }
-    public bool CanSelect => !AlreadyAdded;
+    public bool CanSelect => !AlreadyAdded && !IsIgnored;
+    public bool CanIgnore => !AlreadyAdded;
+    public bool IsIgnored
+    {
+        get => _isIgnored;
+        set
+        {
+            if (!SetProperty(ref _isIgnored, value)) return;
+            OnPropertyChanged(nameof(IgnoreActionText));
+            OnPropertyChanged(nameof(CanSelect));
+        }
+    }
+    public string IgnoreActionText => IsIgnored ? "恢复" : "忽略";
+    public IAsyncRelayCommand ToggleIgnoreCommand { get; }
     public string Title => string.IsNullOrWhiteSpace(Info.DisplayName) ? Info.ScreenName : Info.DisplayName!;
     public string Subtitle => AlreadyAdded
         ? $"@{Info.ScreenName} · 已添加"
@@ -33,7 +51,7 @@ public sealed partial class FollowingRowViewModel : ObservableObject
         get => _isSelected;
         set
         {
-            if (AlreadyAdded || !SetProperty(ref _isSelected, value)) return;
+            if (!CanSelect || !SetProperty(ref _isSelected, value)) return;
             SelectedChanged?.Invoke();
         }
     }
@@ -49,6 +67,8 @@ public partial class FollowingPickerViewModel : ObservableObject
     private readonly IAccountQueryService _accountQuery;
     private readonly IUiDispatcher _dispatcher;
     private readonly List<FollowingRowViewModel> _all = [];
+    private HashSet<string> _ignoredIds = new(StringComparer.Ordinal);
+    private Account? _activeAccount;
 
     private string SiteId => _currentSite.SiteId;
 
@@ -68,10 +88,12 @@ public partial class FollowingPickerViewModel : ObservableObject
 
     public ObservableCollection<FollowingRowViewModel> VisibleItems { get; }
 
-    public int SelectedCount => _all.Count(r => r.IsSelected && !r.AlreadyAdded);
+    public int SelectedCount => SelectedFilterIndex == 0
+        ? _all.Count(r => r.IsSelected && !r.AlreadyAdded && !r.IsIgnored) : 0;
     public bool CanAddSelected => SelectedCount > 0;
 
     [ObservableProperty] private string? _searchText;
+    [ObservableProperty] private int _selectedFilterIndex;
     [ObservableProperty] private bool _isBusy;
     [ObservableProperty] private string? _resultMessage;
     [ObservableProperty] private string? _statusText;
@@ -82,6 +104,7 @@ public partial class FollowingPickerViewModel : ObservableObject
     public IAsyncRelayCommand AddSelectedCommand { get; }
 
     partial void OnSearchTextChanged(string? value) => ApplyFilter();
+    partial void OnSelectedFilterIndexChanged(int value) => ApplyFilter();
 
     public async Task<bool> LoadAsync(CancellationToken ct = default)
     {
@@ -98,6 +121,11 @@ public partial class FollowingPickerViewModel : ObservableObject
         {
             var existing = await _userQuery.ListAsync(SiteId, new UserFilter(), ct);
             addedIds = existing.Select(u => u.RestId).ToHashSet(StringComparer.Ordinal);
+            var ignored = await _users.GetIgnoredFollowingIdsAsync(account, ct);
+            if (_activeAccount?.Id != account.Id)
+                _all.Clear();
+            _activeAccount = account;
+            _ignoredIds = ignored.ToHashSet(StringComparer.Ordinal);
         }
         catch (Exception ex)
         {
@@ -157,7 +185,9 @@ public partial class FollowingPickerViewModel : ObservableObject
 
     public async Task<bool> AddSelectedAsync(CancellationToken ct = default)
     {
-        var selected = _all.Where(r => r.IsSelected && !r.AlreadyAdded).Select(r => r.Info).ToList();
+        var selected = SelectedFilterIndex == 0
+            ? _all.Where(r => r.IsSelected && !r.AlreadyAdded && !r.IsIgnored).Select(r => r.Info).ToList()
+            : [];
         if (selected.Count == 0)
         {
             ResultMessage = "请选择要添加的用户";
@@ -224,13 +254,14 @@ public partial class FollowingPickerViewModel : ObservableObject
 
     private void ShowFollowing(IReadOnlyList<SiteUserInfo> followed, IReadOnlySet<string> addedIds)
     {
-        var selected = _all.Where(r => r.IsSelected && !r.AlreadyAdded)
+        var selected = _all.Where(r => r.IsSelected && r.CanSelect)
             .Select(r => r.Info.RestId)
             .ToHashSet(StringComparer.Ordinal);
         _all.Clear();
         foreach (var info in followed)
         {
-            var row = new FollowingRowViewModel(info, addedIds.Contains(info.RestId));
+            var row = new FollowingRowViewModel(info, addedIds.Contains(info.RestId),
+                _ignoredIds.Contains(info.RestId), ToggleIgnoreAsync);
             if (selected.Contains(info.RestId) && row.CanSelect)
                 row.IsSelected = true;
             row.SelectedChanged += NotifySelection;
@@ -242,10 +273,15 @@ public partial class FollowingPickerViewModel : ObservableObject
     private void ApplyFilter()
     {
         var q = SearchText?.Trim();
-        IEnumerable<FollowingRowViewModel> rows = _all;
+        IEnumerable<FollowingRowViewModel> rows = SelectedFilterIndex switch
+        {
+            1 => _all.Where(r => r.AlreadyAdded),
+            2 => _all.Where(r => !r.AlreadyAdded && r.IsIgnored),
+            _ => _all.Where(r => !r.AlreadyAdded && !r.IsIgnored),
+        };
         if (!string.IsNullOrEmpty(q))
         {
-            rows = _all.Where(r =>
+            rows = rows.Where(r =>
                 r.Info.ScreenName.Contains(q, StringComparison.OrdinalIgnoreCase) ||
                 (r.Info.DisplayName?.Contains(q, StringComparison.OrdinalIgnoreCase) ?? false));
         }
@@ -253,6 +289,29 @@ public partial class FollowingPickerViewModel : ObservableObject
         foreach (var row in rows)
             VisibleItems.Add(row);
         NotifySelection();
+    }
+
+    private async Task ToggleIgnoreAsync(FollowingRowViewModel row)
+    {
+        if (row.AlreadyAdded || _activeAccount is null) return;
+        try
+        {
+            var ignored = !_ignoredIds.Contains(row.Info.RestId);
+            await _users.SetFollowingIgnoredAsync(_activeAccount, row.Info.RestId, ignored);
+            foreach (var current in _all.Where(r => r.Info.RestId == row.Info.RestId))
+            {
+                current.IsSelected = false;
+                current.IsIgnored = ignored;
+            }
+            if (ignored) _ignoredIds.Add(row.Info.RestId);
+            else _ignoredIds.Remove(row.Info.RestId);
+            ApplyFilter();
+        }
+        catch (Exception ex)
+        {
+            ResultMessage = ex.Message;
+            StatusText = $"操作失败：{ex.Message}";
+        }
     }
 
     private void NotifySelection()

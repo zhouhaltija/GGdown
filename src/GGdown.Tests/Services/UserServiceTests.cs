@@ -58,6 +58,24 @@ public class UserServiceTests : IDisposable
     }
 
     [Fact]
+    public async Task Ignored_following_is_persistent_reversible_and_account_scoped()
+    {
+        var other = new Account
+        { SiteId = "twitter", CookiePath = "twitter\\other\\cookies.txt", AddedAt = DateTime.UtcNow };
+        _t.Item2.Accounts.Add(other);
+        _t.Item2.SaveChanges();
+
+        await _svc.SetFollowingIgnoredAsync(_account, "2", true);
+        await _svc.SetFollowingIgnoredAsync(_account, "2", true);
+        Assert.Equal(["2"], await _svc.GetIgnoredFollowingIdsAsync(_account));
+        Assert.Empty(await _svc.GetIgnoredFollowingIdsAsync(other));
+        Assert.Single(_t.Item2.IgnoredFollowing);
+
+        await _svc.SetFollowingIgnoredAsync(_account, "2", false);
+        Assert.Empty(await _svc.GetIgnoredFollowingIdsAsync(_account));
+    }
+
+    [Fact]
     public async Task AddFollowingUsers_adds_only_selected()
     {
         var followed = await _svc.ListFollowingAsync(_account);
@@ -98,6 +116,28 @@ public class UserServiceTests : IDisposable
     public async Task AddUser_invalid_input_throws()
     {
         await Assert.ThrowsAsync<ArgumentException>(() => _svc.AddUserAsync(_account, "!!bad!!"));
+    }
+
+    [Fact]
+    public async Task Douyin_refresh_uses_rest_id_profile_url()
+    {
+        var account = new Account
+        { SiteId = "douyin", CookiePath = "douyin\\c\\cookies.txt", Status = AccountStatus.Ok,
+            IsActive = true, AddedAt = DateTime.UtcNow };
+        _t.Item2.Accounts.Add(account);
+        _t.Item2.Users.Add(new User
+        { SiteId = "douyin", RestId = "MS4wLjABtest", ScreenName = "creator_name",
+            Source = UserSource.Manual, AddedAt = DateTime.UtcNow, UpdatedAt = DateTime.UtcNow });
+        await _t.Item2.SaveChangesAsync();
+        _engine.NextUserInfo = new SiteUserInfo("MS4wLjABtest", "creator_name", "Creator", null);
+        var service = new UserService(new SingleSiteDbContextFactory(_t.Item2), _engine, _paths,
+            new SiteRegistry([new TwitterSiteProvider(), new DouyinSiteProvider()]),
+            NullLogger<UserService>.Instance);
+
+        var updated = await service.RefreshProfilesAsync(account);
+
+        Assert.Equal(1, updated);
+        Assert.Equal("https://www.douyin.com/user/MS4wLjABtest", _engine.LastUserInfoInput);
     }
 
     [Fact]

@@ -15,7 +15,8 @@
                     Visibility="{x:Bind conv:UiConv.ToVisibility(Vm.IsSiteAvailable), Mode=OneWay}">
             <Button Content="添加用户" Command="{x:Bind Vm.ShowAddUserCommand}" Style="{StaticResource AccentButtonStyle}"/>
             <Button Content="关注列表" Command="{x:Bind Vm.ShowFollowingListCommand}"
-                    IsEnabled="{x:Bind Vm.CanShowFollowingList, Mode=OneWay}"/>
+                    IsEnabled="{x:Bind Vm.CanShowFollowingList, Mode=OneWay}"
+                    Visibility="{x:Bind conv:UiConv.ToVisibility(Vm.SupportsFollowingList), Mode=OneWay}"/>
             <AutoSuggestBox PlaceholderText="搜索用户名/昵称" QueryIcon="Find"
                              Text="{x:Bind Vm.SearchText, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
                              Width="240"/>
@@ -89,11 +90,12 @@
                 <controls:DataGridTextColumn Header="末次下载" Binding="{Binding LastDownloadText}" Width="160"/>
                 <controls:DataGridTemplateColumn Header="操作" Width="480">
                     <controls:DataGridTemplateColumn.CellTemplate>
-                        <DataTemplate>
+                        <DataTemplate x:DataType="vm:UserRowViewModel">
                             <StackPanel Orientation="Horizontal" Spacing="4">
                                 <Button Content="{Binding DownloadButtonText}" Command="{Binding DownloadCommand}"
                                         IsEnabled="{Binding CanDownload}" Padding="8,2"/>
-                                <Button Content="高光" Command="{Binding DownloadHighlightsCommand}" Padding="8,2"/>
+                                <Button Content="高光" Command="{Binding DownloadHighlightsCommand}"
+                                        Visibility="{x:Bind conv:UiConv.ToVisibility(ShowHighlights), Mode=OneWay}" Padding="8,2"/>
                                 <Button Content="目录" Command="{Binding OpenFolderCommand}" Padding="8,2"/>
                                 <Button Content="主页" Command="{Binding OpenProfileCommand}" Padding="8,2"/>
                                 <Button Content="{Binding PinButtonText}" Command="{Binding TogglePinCommand}" Padding="8,2"/>
@@ -122,7 +124,8 @@
                 <TextBlock Text="②" FontWeight="SemiBold" VerticalAlignment="Center"/>
                 <TextBlock Text="等待验证通过" VerticalAlignment="Center" Opacity="0.7"/>
             </StackPanel>
-            <StackPanel Orientation="Horizontal" Spacing="8">
+            <StackPanel Orientation="Horizontal" Spacing="8"
+                        Visibility="{x:Bind conv:UiConv.ToVisibility(Vm.SupportsFollowingList), Mode=OneWay}">
                 <TextBlock Text="③" FontWeight="SemiBold" VerticalAlignment="Center"/>
                 <Button Content="关注列表" IsEnabled="{x:Bind Vm.HasAccount, Mode=OneWay}"
                         Click="OnEmptyStateFollowingListClick"/>
@@ -130,6 +133,12 @@
                            Visibility="{x:Bind conv:UiConv.ToInverseVisibility(Vm.HasAccount), Mode=OneWay}"/>
                 <TextBlock Text="从关注里选择要添加的用户" VerticalAlignment="Center" Opacity="0.7"
                            Visibility="{x:Bind conv:UiConv.ToVisibility(Vm.HasAccount), Mode=OneWay}"/>
+            </StackPanel>
+            <StackPanel Orientation="Horizontal" Spacing="8"
+                        Visibility="{x:Bind conv:UiConv.ToVisibility(Vm.ShowManualAddGuide), Mode=OneWay}">
+                <TextBlock Text="③" FontWeight="SemiBold" VerticalAlignment="Center"/>
+                <Button Content="添加用户" Command="{x:Bind Vm.ShowAddUserCommand}"/>
+                <TextBlock Text="输入用户主页链接或 sec_user_id" VerticalAlignment="Center" Opacity="0.7"/>
             </StackPanel>
         </StackPanel>
         <!-- 底部操作条：选中计数/按钮随 BottomBarVisible 显隐；StatusMessage 常显（放右侧）——

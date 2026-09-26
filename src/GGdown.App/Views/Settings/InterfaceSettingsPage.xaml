@@ -20,7 +20,18 @@
                                 <ColumnDefinition Width="*"/>
                                 <ColumnDefinition Width="Auto"/>
                             </Grid.ColumnDefinitions>
-                            <FontIcon Glyph="{x:Bind IconGlyph, Mode=OneWay}" FontSize="18" VerticalAlignment="Center"/>
+                            <Grid Width="22" Height="22" VerticalAlignment="Center">
+                                <Path Width="20" Height="20" Stretch="Uniform"
+                                      Fill="{ThemeResource TextFillColorPrimaryBrush}"
+                                      Data="M14.234 10.162 22.977 0h-2.072l-7.591 8.824L7.251 0H.258l9.168 13.343L.258 24H2.33l8.016-9.318L16.749 24h6.993zm-2.837 3.299-.929-1.329L3.076 1.56h3.182l5.965 8.532.929 1.329 7.754 11.09h-3.182z"
+                                      Visibility="{x:Bind conv:UiConv.ToTwitterVisibility(SiteId), Mode=OneWay}"/>
+                                <Image Source="{x:Bind conv:UiConv.ToSiteIcon(SiteId), Mode=OneWay}"
+                                       Visibility="{x:Bind conv:UiConv.ToPixivVisibility(SiteId), Mode=OneWay}"/>
+                                <TextBlock Text="♪" FontSize="22" HorizontalAlignment="Center" VerticalAlignment="Center"
+                                           Visibility="{x:Bind conv:UiConv.ToDouyinVisibility(SiteId), Mode=OneWay}"/>
+                                <FontIcon Glyph="{x:Bind IconGlyph, Mode=OneWay}" FontSize="18"
+                                          Visibility="{x:Bind conv:UiConv.ToInverseVisibility(Available), Mode=OneWay}"/>
+                            </Grid>
                             <StackPanel Grid.Column="1" VerticalAlignment="Center" Spacing="2">
                                 <TextBlock Text="{x:Bind DisplayName, Mode=OneWay}"/>
                                 <TextBlock Text="即将支持" FontSize="12" Opacity="0.5"

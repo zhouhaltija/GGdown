@@ -171,6 +171,7 @@ public partial class DownloadsViewModel : ObservableObject
         DownloadLikesCommand = new AsyncRelayCommand(() => DownloadAccountContentAsync(ContentKind.AccountLikes));
         DownloadBookmarksCommand = new AsyncRelayCommand(() => DownloadAccountContentAsync(ContentKind.AccountBookmarks));
         SearchCommand = new AsyncRelayCommand(SearchAsync);
+        DownloadPermalinkCommand = new AsyncRelayCommand(DownloadPermalinkAsync);
         RebuildAccountActions();
     }
 
@@ -188,17 +189,23 @@ public partial class DownloadsViewModel : ObservableObject
     [ObservableProperty]
     private string? _searchQuery;
 
+    [ObservableProperty]
+    private string? _permalinkInput;
+
     public event Action? JobsChanged; // 页面无需订阅；供测试（任何 Jobs 变更后触发）
 
     public IAsyncRelayCommand DownloadLikesCommand { get; }
     public IAsyncRelayCommand DownloadBookmarksCommand { get; }
     public IAsyncRelayCommand SearchCommand { get; }
+    public IAsyncRelayCommand DownloadPermalinkCommand { get; }
     public ObservableCollection<AccountContentActionViewModel> AccountActions { get; } = [];
 
     public bool IsSiteAvailable => _currentSite.IsAvailable;
     public bool SupportsAccountContent => _currentSite.IsAvailable && AccountActions.Count > 0;
     public bool SupportsSearch => _currentSite.IsAvailable && _sites.IsRegistered(SiteId)
         && _sites.Get(SiteId).SupportedKinds.Contains(ContentKind.Search);
+    public bool SupportsPermalink => _currentSite.IsAvailable && _sites.IsRegistered(SiteId)
+        && _sites.Get(SiteId).SupportedKinds.Contains(ContentKind.Permalink);
     public bool ShowComingSoon => !_currentSite.IsAvailable;
     public string ComingSoonMessage => $"{_currentSite.Current.DisplayName} 即将支持，该站点尚未开放下载。";
 
@@ -207,6 +214,7 @@ public partial class DownloadsViewModel : ObservableObject
         OnPropertyChanged(nameof(IsSiteAvailable));
         OnPropertyChanged(nameof(SupportsAccountContent));
         OnPropertyChanged(nameof(SupportsSearch));
+        OnPropertyChanged(nameof(SupportsPermalink));
         OnPropertyChanged(nameof(ShowComingSoon));
         OnPropertyChanged(nameof(ComingSoonMessage));
         RebuildAccountActions();
@@ -376,6 +384,51 @@ public partial class DownloadsViewModel : ObservableObject
             var dir = await _settings.GetDownloadDirectoryAsync();
             var siteOptions = await _settings.GetSiteOptionsAsync(SiteId);
             await _queue.EnqueuePermalinkAsync(account, url, title, kind, dir, siteOptions);
+            StatusMessage = $"已加入下载队列：{title}";
+        }
+        catch (Exception ex)
+        {
+            StatusMessage = ex.Message;
+        }
+    }
+
+    private async Task DownloadPermalinkAsync()
+    {
+        if (!SupportsPermalink)
+        {
+            StatusMessage = ComingSoonMessage;
+            return;
+        }
+
+        var provider = _sites.Get(SiteId);
+        var parsed = provider.ParseInput(PermalinkInput ?? "");
+        if (!parsed.Ok || parsed.Kind is not (PasteKind.Tweet or PasteKind.List or PasteKind.Work)
+            || string.IsNullOrWhiteSpace(parsed.DirectUrl))
+        {
+            StatusMessage = parsed.Error ?? "请输入有效的作品链接";
+            return;
+        }
+
+        try
+        {
+            var account = await _accountQuery.GetActiveAsync(SiteId);
+            if (account is null)
+            {
+                StatusMessage = "请先在设置中导入 Cookie";
+                return;
+            }
+
+            var dir = await _settings.GetDownloadDirectoryAsync();
+            var siteOptions = await _settings.GetSiteOptionsAsync(SiteId);
+            var title = parsed.Kind switch
+            {
+                PasteKind.Work => $"作品 {parsed.RestId ?? "链接"}",
+                PasteKind.Tweet => $"推文 {parsed.RestId}",
+                PasteKind.List => $"列表 {parsed.RestId}",
+                _ => "作品链接",
+            };
+            await _queue.EnqueuePermalinkAsync(account, parsed.DirectUrl, title,
+                ContentKind.Permalink, dir, siteOptions);
             StatusMessage = $"已加入下载队列：{title}";
         }
         catch (Exception ex)

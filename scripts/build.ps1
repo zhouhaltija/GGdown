@@ -12,6 +12,12 @@ $ErrorActionPreference = 'Stop'
 $RepoRoot = [System.IO.Path]::GetFullPath((Join-Path $PSScriptRoot ".."))
 $DistDir = Join-Path $RepoRoot "dist"
 
+# 在清理既有 dist 之前核对本机第三方源码。
+& (Join-Path $PSScriptRoot "build-engine.ps1") -GalleryDlVersion $GalleryDlVersion -CheckPrerequisites
+if (-not (Test-Path -LiteralPath (Join-Path $RepoRoot "gallery-dl/LICENSE") -PathType Leaf)) {
+    throw "缺少 gallery-dl/LICENSE；请检出构建所需的 gallery-dl 源码"
+}
+
 # 可重入：清空 dist（保留引擎由 build-engine 自清；这里整体清更简单）
 if (Test-Path $DistDir) { Remove-Item $DistDir -Recurse -Force }
 
@@ -25,12 +31,13 @@ dotnet publish (Join-Path $RepoRoot "src\GGdown.App\GGdown.App.csproj") `
     -c Release -r win-x64 --self-contained true -o (Join-Path $DistDir "app")
 if ($LASTEXITCODE -ne 0) { throw "dotnet publish 失败" }
 
-# 3. GPL 资产：应用 LICENSE + THIRD-PARTY.md + gallery-dl LICENSE → dist\licenses
+# 3. GPL 资产：应用、gallery-dl 与 DouK-Downloader 许可证。
 Write-Host "==> 拷贝许可证资产"
 New-Item (Join-Path $DistDir "licenses") -ItemType Directory -Force | Out-Null
 Copy-Item (Join-Path $RepoRoot "LICENSE") (Join-Path $DistDir "licenses\LICENSE") -Force
 Copy-Item (Join-Path $RepoRoot "THIRD-PARTY.md") (Join-Path $DistDir "licenses\THIRD-PARTY.md") -Force
 Copy-Item (Join-Path $RepoRoot "gallery-dl\LICENSE") (Join-Path $DistDir "licenses\gallery-dl-LICENSE") -Force
+Copy-Item (Join-Path $RepoRoot "third_party\TikTokDownloader\license") (Join-Path $DistDir "licenses\TikTokDownloader-LICENSE") -Force
 
 if ($SkipInstaller) { Write-Host "==> 跳过安装器"; exit 0 }
 

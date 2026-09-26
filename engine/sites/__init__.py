@@ -107,6 +107,9 @@ def load_site(name):
     if key == "pixiv":
         from sites import pixiv
         return pixiv
+    if key == "douyin":
+        from sites import douyin
+        return douyin
     raise ValueError(f"unknown site: {name!r}")
 
 

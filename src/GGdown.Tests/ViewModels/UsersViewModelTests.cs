@@ -390,6 +390,36 @@ public class UsersViewModelTests : IDisposable
     }
 
     [Fact]
+    public async Task Douyin_hides_following_and_highlights_with_active_account()
+    {
+        _db.Accounts.Add(new Account
+        { SiteId = "douyin", CookiePath = "d", Status = AccountStatus.Ok, IsActive = true, AddedAt = DateTime.UtcNow });
+        _db.Users.Add(new User
+        { SiteId = "douyin", RestId = "MS4wLjABtest", ScreenName = "creator", Source = UserSource.Manual,
+            AddedAt = DateTime.UtcNow, UpdatedAt = DateTime.UtcNow });
+        await _db.SaveChangesAsync();
+        var sites = new SiteRegistry([new TwitterSiteProvider(), new DouyinSiteProvider()]);
+        var site = new FakeCurrentSite();
+        await site.SelectAsync("douyin");
+        var vm = new UsersViewModel(new UserQueryService(new SingleSiteDbContextFactory(_db)),
+            new AccountQueryService(new SingleSiteDbContextFactory(_db)),
+            new UserService(new SingleSiteDbContextFactory(_db), _engine, _paths, sites, NullLogger<UserService>.Instance),
+            new DownloadQueueService(new SingleSiteDbContextFactory(_db), _engine, new FakeStats(), _paths, sites,
+                NullLogger<DownloadQueueService>.Instance),
+            new AppSettings(new SingleGlobalDbContextFactory(_global.Item2), sites, new SiteDbContextFactory(_paths)),
+            new SyncDispatcher(), sites, site,
+            new HistoryQueryService(new SingleSiteDbContextFactory(_db, "twitter", "douyin")));
+
+        await vm.RefreshCommand.ExecuteAsync(null);
+
+        Assert.True(vm.HasAccount);
+        Assert.False(vm.SupportsFollowingList);
+        Assert.False(vm.CanShowFollowingList);
+        Assert.False(vm.ShowFollowingListCommand.CanExecute(null));
+        Assert.False(Assert.Single(vm.Users).ShowHighlights);
+    }
+
+    [Fact]
     public async Task OpenFolder_without_downloaded_files_sets_status()
     {
         await _settings.SetDownloadDirectoryAsync(Path.Combine(_paths.Root, "dl"));

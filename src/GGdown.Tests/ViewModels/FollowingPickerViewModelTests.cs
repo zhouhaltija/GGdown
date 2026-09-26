@@ -60,9 +60,11 @@ public class FollowingPickerViewModelTests : IDisposable
         _db.SaveChanges();
 
         Assert.True(await _vm.LoadAsync());
-        Assert.Equal(2, _vm.VisibleItems.Count);
-        var alice = _vm.VisibleItems.Single(r => r.Info.ScreenName == "alice");
-        var bob = _vm.VisibleItems.Single(r => r.Info.ScreenName == "bob");
+        Assert.Equal(["bob"], _vm.VisibleItems.Select(r => r.Info.ScreenName));
+        _vm.SelectedFilterIndex = 1;
+        var alice = Assert.Single(_vm.VisibleItems);
+        _vm.SelectedFilterIndex = 0;
+        var bob = Assert.Single(_vm.VisibleItems);
         Assert.True(alice.AlreadyAdded);
         Assert.False(alice.CanSelect);
         Assert.Contains("已添加", alice.Subtitle);
@@ -91,6 +93,65 @@ public class FollowingPickerViewModelTests : IDisposable
         Assert.Equal("alice", _vm.VisibleItems[0].Info.ScreenName);
         _vm.SearchText = "";
         Assert.Equal(2, _vm.VisibleItems.Count);
+    }
+
+    [Fact]
+    public async Task Ignore_moves_pending_user_to_ignored_and_restore_returns_it()
+    {
+        Assert.True(await _vm.LoadAsync());
+        var bob = _vm.VisibleItems.Single(r => r.Info.RestId == "2");
+        await bob.ToggleIgnoreCommand.ExecuteAsync(null);
+
+        Assert.Equal(["alice"], _vm.VisibleItems.Select(r => r.Info.ScreenName));
+        _vm.SelectedFilterIndex = 2;
+        Assert.Equal(["bob"], _vm.VisibleItems.Select(r => r.Info.ScreenName));
+        Assert.False(_vm.VisibleItems.Single().CanSelect);
+        _vm.VisibleItems.Single().IsSelected = true;
+        Assert.Equal(0, _vm.SelectedCount);
+        await _vm.VisibleItems.Single().ToggleIgnoreCommand.ExecuteAsync(null);
+        Assert.Empty(_vm.VisibleItems);
+        _vm.SelectedFilterIndex = 0;
+        Assert.Equal(["alice", "bob"], _vm.VisibleItems.Select(r => r.Info.ScreenName));
+    }
+
+    [Fact]
+    public async Task Ignore_survives_reopen_and_cached_then_live_refresh()
+    {
+        Assert.True(await _vm.LoadAsync());
+        await _vm.VisibleItems.Single(r => r.Info.RestId == "2").ToggleIgnoreCommand.ExecuteAsync(null);
+
+        var reopened = NewPicker();
+        var gate = new TaskCompletionSource<IReadOnlyList<SiteUserInfo>>();
+        _engine.FollowingDelay = gate;
+        var loading = reopened.LoadAsync();
+        Assert.Equal(["alice"], reopened.VisibleItems.Select(r => r.Info.ScreenName));
+        gate.SetResult(_engine.NextFollowing);
+        Assert.True(await loading);
+        Assert.Equal(["alice"], reopened.VisibleItems.Select(r => r.Info.ScreenName));
+        reopened.SelectedFilterIndex = 2;
+        Assert.Equal(["bob"], reopened.VisibleItems.Select(r => r.Info.ScreenName));
+    }
+
+    [Fact]
+    public async Task Ignore_during_refresh_is_not_undone_by_live_result()
+    {
+        Assert.True(await _vm.LoadAsync());
+        var gate = new TaskCompletionSource<IReadOnlyList<SiteUserInfo>>();
+        _engine.FollowingDelay = gate;
+        var loading = _vm.LoadAsync();
+        await _vm.VisibleItems.Single(r => r.Info.RestId == "2").ToggleIgnoreCommand.ExecuteAsync(null);
+        gate.SetResult(_engine.NextFollowing);
+        Assert.True(await loading);
+        Assert.Equal(["alice"], _vm.VisibleItems.Select(r => r.Info.ScreenName));
+    }
+
+    private FollowingPickerViewModel NewPicker()
+    {
+        var factory = new SingleSiteDbContextFactory(_db);
+        var service = new UserService(factory, _engine, _paths,
+            new SiteRegistry([new TwitterSiteProvider()]), NullLogger<UserService>.Instance);
+        return new FollowingPickerViewModel(service, new UserQueryService(factory),
+            new AccountQueryService(factory), new SyncDispatcher(), new FakeCurrentSite());
     }
 
     [Fact]

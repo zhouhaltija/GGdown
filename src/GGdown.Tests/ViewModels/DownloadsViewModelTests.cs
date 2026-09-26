@@ -255,6 +255,54 @@ public class DownloadsViewModelTests : IDisposable
         Assert.Contains(_db.Jobs.AsNoTracking(), j => j.TargetKind == TargetKind.Search);
     }
 
+    [Fact]
+    public async Task Douyin_work_link_enqueues_permalink_without_search()
+    {
+        var douyin = new Account
+        { SiteId = "douyin", CookiePath = "d", Status = AccountStatus.Ok, IsActive = true, AddedAt = DateTime.UtcNow };
+        _db.Accounts.Add(douyin);
+        await _db.SaveChangesAsync();
+        var sites = new SiteRegistry([new TwitterSiteProvider(), new DouyinSiteProvider()]);
+        var queue = new DownloadQueueService(new SingleSiteDbContextFactory(_db), _engine, new FakeStats(), _paths,
+            sites, NullLogger<DownloadQueueService>.Instance);
+        var site = new FakeCurrentSite();
+        await site.SelectAsync("douyin");
+        var vm = new DownloadsViewModel(queue, new AccountQueryService(new SingleSiteDbContextFactory(_db)),
+            new AppSettings(new SingleGlobalDbContextFactory(_global.Item2), sites, new SiteDbContextFactory(_paths)),
+            new SyncDispatcher(), site, sites);
+        var gate = new TaskCompletionSource();
+        _engine.OnDownload = async (_, _, _, ct) => await gate.Task.WaitAsync(ct);
+
+        Assert.True(vm.SupportsPermalink);
+        Assert.False(vm.SupportsSearch);
+        vm.PermalinkInput = "https://www.douyin.com/video/1234567890123456789";
+        await vm.DownloadPermalinkCommand.ExecuteAsync(null);
+
+        var job = Assert.Single(_db.Jobs.Where(j => j.SiteId == "douyin"));
+        Assert.Equal(TargetKind.Permalink, job.TargetKind);
+        await WaitUntil(() => _engine.Downloads.Any(d => d.Plan.SiteId == "douyin"));
+        Assert.Equal("https://www.douyin.com/video/1234567890123456789",
+            _engine.Downloads.Single(d => d.Plan.SiteId == "douyin").Plan.Urls.Single());
+        gate.SetResult();
+        await WaitUntil(() => queue.Active.Count == 0);
+    }
+
+    [Fact]
+    public async Task Douyin_user_link_is_rejected_without_enqueuing()
+    {
+        var sites = new SiteRegistry([new TwitterSiteProvider(), new DouyinSiteProvider()]);
+        var site = new FakeCurrentSite();
+        await site.SelectAsync("douyin");
+        var vm = new DownloadsViewModel(_queue, new AccountQueryService(new SingleSiteDbContextFactory(_db)),
+            _settings, new SyncDispatcher(), site, sites);
+
+        vm.PermalinkInput = "https://www.douyin.com/user/MS4wLjABtest";
+        await vm.DownloadPermalinkCommand.ExecuteAsync(null);
+
+        Assert.Contains("作品链接", vm.StatusMessage);
+        Assert.Empty(_db.Jobs.Where(j => j.SiteId == "douyin"));
+    }
+
     // 修复波 B5 flaky 处置：隔离复跑 3/3 通过、全量负载下偶发 5s 超时（累计 3 次）——负载敏感而非回归，
     // 按最终审查建议把默认 timeoutMs 5000→15000（纯测试参数，断言不变）
     private static async Task WaitUntil(Func<bool> cond, int timeoutMs = 15000)

@@ -22,7 +22,7 @@ public static class CoreServices
             GalleryDlPath = Path.Combine(paths.EngineDir, "site-packages"),
         });
         services.AddSingleton<IDownloadEngine, RunnerEngine>();
-        services.AddSingleton<SiteRegistry>(_ => new SiteRegistry([new TwitterSiteProvider(), new PixivSiteProvider()]));
+        services.AddSingleton<SiteRegistry>(_ => new SiteRegistry([new TwitterSiteProvider(), new PixivSiteProvider(), new DouyinSiteProvider()]));
 
         // Task 3/5/6 双库：全局库走 DI（AppSettings/启动初始化用），AddDbContextFactory 先注册使
         // options 为 Singleton（沿用控制器裁定：singleton 工厂捕获 scoped options 在 scope 校验宿主会炸）；

@@ -5,7 +5,7 @@
     xmlns:conv="using:GGdown.App.Infrastructure"
     xmlns:vm="using:GGdown.ViewModels"
     Title="GGdown">
-    <!-- Task 8：平台优先壳层——左 48px 平台图标栏 + 顶部页组标签行 + Frame；
+    <!-- Task 8：平台优先壳层——左侧可展开的平台栏 + 顶部页组标签行 + Frame；
          旧导航视图与标题式站点切换浮出层已移除（MainNavViewModel 驱动）。
          全局通知行（B8 InfoBar）保留在导航结构之上。 -->
     <Grid>
@@ -24,11 +24,11 @@
         </InfoBar>
         <Grid Grid.Row="1">
             <Grid.ColumnDefinitions>
-                <ColumnDefinition Width="48"/>
+                <ColumnDefinition x:Name="PlatformRailColumn" Width="192"/>
                 <ColumnDefinition Width="*"/>
             </Grid.ColumnDefinitions>
             <!-- —— 平台栏 —— -->
-            <Grid>
+            <Grid x:Name="PlatformRail">
                 <Grid.RowDefinitions>
                     <RowDefinition Height="*"/>
                     <RowDefinition Height="Auto"/>
@@ -36,53 +36,91 @@
                 </Grid.RowDefinitions>
                 <ListView x:Name="PlatformList"
                           Grid.Row="0"
+                          Padding="0"
+                          ScrollViewer.HorizontalScrollMode="Disabled"
                           SelectionMode="Single"
+                          SingleSelectionFollowsFocus="False"
                           ItemsSource="{x:Bind Nav.Platforms, Mode=OneWay}"
                           SelectionChanged="PlatformList_SelectionChanged">
                     <ListView.ItemContainerStyle>
                         <Style TargetType="ListViewItem">
-                            <Setter Property="HorizontalContentAlignment" Value="Center"/>
+                            <Setter Property="MinWidth" Value="0"/>
+                            <Setter Property="HorizontalAlignment" Value="Stretch"/>
+                            <Setter Property="HorizontalContentAlignment" Value="Stretch"/>
                             <Setter Property="MinHeight" Value="44"/>
                             <Setter Property="Padding" Value="0"/>
-                            <Setter Property="HorizontalContentAlignment" Value="Center"/>
+                            <Setter Property="Margin" Value="0"/>
                         </Style>
                     </ListView.ItemContainerStyle>
                     <ListView.ItemTemplate>
                         <DataTemplate x:DataType="vm:PlatformItemViewModel">
-                            <StackPanel ToolTipService.ToolTip="{x:Bind DisplayName, Mode=OneWay}" Spacing="2">
-                                <FontIcon Glyph="{x:Bind IconGlyph, Mode=OneWay}" FontSize="20"/>
-                                <!-- 选中态小横条（ListViewItem 自带背景高亮之外的次级指示） -->
-                                <Border Height="2" Width="16" CornerRadius="1"
-                                        HorizontalAlignment="Center"
+                            <Grid Height="44" ToolTipService.ToolTip="{x:Bind DisplayName, Mode=OneWay}">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="72"/>
+                                    <ColumnDefinition Width="*"/>
+                                </Grid.ColumnDefinitions>
+                                <Grid Width="22" Height="22" HorizontalAlignment="Center" VerticalAlignment="Center">
+                                    <Path Width="20" Height="20" Stretch="Uniform"
+                                          Fill="{ThemeResource TextFillColorPrimaryBrush}"
+                                          Data="M14.234 10.162 22.977 0h-2.072l-7.591 8.824L7.251 0H.258l9.168 13.343L.258 24H2.33l8.016-9.318L16.749 24h6.993zm-2.837 3.299-.929-1.329L3.076 1.56h3.182l5.965 8.532.929 1.329 7.754 11.09h-3.182z"
+                                          Visibility="{x:Bind conv:UiConv.ToTwitterVisibility(SiteId), Mode=OneWay}"/>
+                                    <Image Source="{x:Bind conv:UiConv.ToSiteIcon(SiteId), Mode=OneWay}"
+                                           Visibility="{x:Bind conv:UiConv.ToPixivVisibility(SiteId), Mode=OneWay}"/>
+                                    <TextBlock Text="♪" FontSize="22" HorizontalAlignment="Center" VerticalAlignment="Center"
+                                               Visibility="{x:Bind conv:UiConv.ToDouyinVisibility(SiteId), Mode=OneWay}"/>
+                                </Grid>
+                                <TextBlock Grid.Column="1" Text="{x:Bind DisplayName, Mode=OneWay}"
+                                           VerticalAlignment="Center" TextTrimming="CharacterEllipsis"
+                                           Visibility="{x:Bind conv:UiConv.ToVisibility(IsSidebarExpanded), Mode=OneWay}"/>
+                                <Border Height="2" Width="16" CornerRadius="1" VerticalAlignment="Bottom"
+                                        HorizontalAlignment="Center" Margin="0,0,0,2"
                                         Background="{ThemeResource AccentFillColorDefaultBrush}"
                                         Visibility="{x:Bind conv:UiConv.ToVisibility(IsSelected), Mode=OneWay}"/>
-                            </StackPanel>
+                            </Grid>
                         </DataTemplate>
                     </ListView.ItemTemplate>
                 </ListView>
                 <Button x:Name="GlobalDownloadsButton"
                         Grid.Row="1" Click="GlobalDownloadsButton_Click"
+                        HorizontalAlignment="Stretch" HorizontalContentAlignment="Stretch"
                         Background="Transparent" BorderThickness="0" Padding="0" MinHeight="44"
                         ToolTipService.ToolTip="全部平台的下载任务">
                     <Grid>
-                        <FontIcon Glyph="&#xE896;" FontSize="20"/>
-                        <Border x:Name="ActiveCountBadge"
-                                Visibility="Collapsed"
-                                MinWidth="16" MinHeight="16" CornerRadius="8"
-                                HorizontalAlignment="Right" VerticalAlignment="Top"
-                                Margin="0,-4,-6,0"
-                                Background="{ThemeResource SystemFillColorCriticalBrush}"
-                                Padding="3,1">
-                            <TextBlock x:Name="ActiveCountText" FontSize="10" Foreground="White"
-                                       HorizontalAlignment="Center" VerticalAlignment="Center"/>
-                        </Border>
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="72"/>
+                            <ColumnDefinition Width="*"/>
+                        </Grid.ColumnDefinitions>
+                        <Grid>
+                            <FontIcon Glyph="&#xE896;" FontSize="20"/>
+                            <Border x:Name="ActiveCountBadge"
+                                    Visibility="Collapsed"
+                                    MinWidth="16" MinHeight="16" CornerRadius="8"
+                                    HorizontalAlignment="Right" VerticalAlignment="Top"
+                                    Margin="0,-4,-6,0"
+                                    Background="{ThemeResource SystemFillColorCriticalBrush}"
+                                    Padding="3,1">
+                                <TextBlock x:Name="ActiveCountText" FontSize="10" Foreground="White"
+                                           HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                            </Border>
+                        </Grid>
+                        <TextBlock x:Name="GlobalDownloadsLabel" Grid.Column="1" Text="全部下载"
+                                   VerticalAlignment="Center"/>
                     </Grid>
                 </Button>
                 <Button x:Name="GlobalSettingsButton"
                         Grid.Row="2" Click="GlobalSettingsButton_Click"
+                        HorizontalAlignment="Stretch" HorizontalContentAlignment="Stretch"
                         Background="Transparent" BorderThickness="0" Padding="0" MinHeight="44"
                         ToolTipService.ToolTip="设置">
-                    <FontIcon Glyph="&#xE713;" FontSize="20"/>
+                    <Grid>
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="72"/>
+                            <ColumnDefinition Width="*"/>
+                        </Grid.ColumnDefinitions>
+                        <FontIcon Glyph="&#xE713;" FontSize="20"/>
+                        <TextBlock x:Name="GlobalSettingsLabel" Grid.Column="1" Text="全局设置"
+                                   VerticalAlignment="Center"/>
+                    </Grid>
                 </Button>
             </Grid>
             <!-- —— 内容区：平台名 + 页组标签 + Frame —— -->
@@ -92,6 +130,13 @@
                     <RowDefinition Height="*"/>
                 </Grid.RowDefinitions>
                 <StackPanel Orientation="Horizontal" Spacing="16" Margin="12,10,12,0">
+                    <Button x:Name="SidebarToggleButton"
+                            Click="SidebarToggleButton_Click"
+                            MinWidth="36" MinHeight="36" Padding="8"
+                            ToolTipService.ToolTip="收起侧栏"
+                            AutomationProperties.Name="收起侧栏">
+                        <FontIcon Glyph="&#xE700;" FontSize="16"/>
+                    </Button>
                     <TextBlock x:Name="HeaderTitle" FontSize="20" FontWeight="SemiBold" VerticalAlignment="Center"/>
                     <!-- 页组标签行：横向单选列表（TabView 容器绑定复杂度高，裁定用 ListView 胶囊行） -->
                     <ListView x:Name="PageTabs"

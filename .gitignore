@@ -8,11 +8,13 @@ __pycache__/
 .pytest_cache/
 dist/
 .cache/
+.venv/
 out/
 engine/dist/
 .artifacts/
 cookies.txt
 docs/cookies.txt
+docs/*_cookies.txt
 docs/superpowers
 x.md
 # 外部源码快照（gallery-dl / TikTokDownloader 等），不入库
@@ -21,3 +23,7 @@ GGdown.lnk
 
 
 .claude/worktrees/
+
+# 本机代理/开发指引，不提交到仓库
+AGENTS.md
+CLAUDE.md

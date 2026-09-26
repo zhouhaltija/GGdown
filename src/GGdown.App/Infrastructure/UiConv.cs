@@ -15,6 +15,18 @@ public static class UiConv
 
     public static Visibility ToInverseVisibility(bool visible) => visible ? Visibility.Collapsed : Visibility.Visible;
 
+    public static Visibility ToTwitterVisibility(string siteId) =>
+        siteId == "twitter" ? Visibility.Visible : Visibility.Collapsed;
+
+    public static Visibility ToPixivVisibility(string siteId) =>
+        siteId == "pixiv" ? Visibility.Visible : Visibility.Collapsed;
+
+    public static Visibility ToDouyinVisibility(string siteId) =>
+        siteId == "douyin" ? Visibility.Visible : Visibility.Collapsed;
+
+    public static ImageSource? ToSiteIcon(string siteId) =>
+        siteId == "pixiv" ? new SvgImageSource(new Uri("ms-appx:///Assets/Brands/pixiv.svg")) : null;
+
     public static ImageSource? ToImageSource(string? pathOrUri)
     {
         if (string.IsNullOrWhiteSpace(pathOrUri)) return null;
