@@ -45,10 +45,12 @@ class FakeSession:
 
 def test_fetch_current_user_requires_identity_and_sends_cookie():
     session = FakeSession({"status_code": 0, "user": {"sec_uid": "MS4wLjABtest", "nickname": "示例作者"}})
-    user = asyncio.run(fetch_current_user(session, "sessionid=fictional"))
+    user = asyncio.run(fetch_current_user(session, "sessionid=fictional; UIFID=sample-uifid"))
     assert user["rest_id"] == "MS4wLjABtest"
-    assert session.calls[0][1]["headers"]["Cookie"] == "sessionid=fictional"
+    assert session.calls[0][1]["headers"]["Cookie"] == "sessionid=fictional; UIFID=sample-uifid"
+    assert session.calls[0][1]["headers"]["uifid"] == "sample-uifid"
     assert "user/profile/self" in session.calls[0][0]
+    assert "a_bogus=" in session.calls[0][0]
 
 
 def test_client_extracts_gallery_using_third_party_extractor():
@@ -118,11 +120,12 @@ def test_read_netscape_cookies_keeps_only_live_douyin_values(tmp_path):
         "# Netscape HTTP Cookie File\n"
         ".douyin.com\tTRUE\t/\tTRUE\t4102444800\tsessionid\tfictional-session\n"
         "www.douyin.com\tFALSE\t/\tTRUE\t4102444800\tUIFID\tfictional-uifid\n"
+        ".douyin.com\tTRUE\t/\tTRUE\t0\tsession_zero\tzero-val\n"
         ".douyin.com\tTRUE\t/\tTRUE\t1\told\texpired\n"
         ".evil.example\tTRUE\t/\tTRUE\t4102444800\tbad\tsecret\n",
         encoding="utf-8",
     )
-    assert read_netscape_cookies(str(path)) == "sessionid=fictional-session; UIFID=fictional-uifid"
+    assert read_netscape_cookies(str(path)) == "sessionid=fictional-session; session_zero=zero-val; UIFID=fictional-uifid"
 
 
 def test_read_netscape_cookies_raises_generic_auth_error_on_malformed_file(tmp_path):

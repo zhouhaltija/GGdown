@@ -4,11 +4,17 @@ import asyncio
 import http.cookiejar
 import os
 import re
+import sys
 from pathlib import Path
 from types import SimpleNamespace
 from urllib.parse import urlsplit
 
 from sites import AuthError
+
+# 确保在开发环境直接调用 runner 或 sites 模块时可导入 TikTokDownloader 的 src 包
+_third_party = Path(__file__).resolve().parents[2] / "third_party" / "TikTokDownloader"
+if _third_party.is_dir() and str(_third_party) not in sys.path:
+    sys.path.insert(0, str(_third_party))
 
 
 _URL = re.compile(r"https?://[^\s，。；！？、【】《》]+", re.IGNORECASE)
@@ -24,8 +30,8 @@ def read_netscape_cookies(path: str) -> str:
         raise AuthError("Cookie 文件解析失败")
     cookies = [
         cookie for cookie in jar
-        if cookie.domain.lstrip(".").lower() in {"douyin.com", "www.douyin.com"}
-        and not cookie.is_expired()
+        if (cookie.domain.lstrip(".").lower() == "douyin.com" or cookie.domain.lstrip(".").lower().endswith(".douyin.com"))
+        and not (cookie.expires and cookie.expires > 0 and cookie.is_expired())
     ]
     if not cookies:
         raise AuthError("Cookie 文件不含可用的抖音 Cookie")
@@ -144,10 +150,31 @@ class _NullRecorder:
 
 
 async def fetch_current_user(session, cookies: str) -> dict:
-    response = await session.get(
+    from src.custom import DATA_HEADERS, USERAGENT
+    from src.encrypt import DouYinParams
+    from src.interface.template import API
+    from src.tools import cookie_str_to_dict
+
+    cookie_dict = cookie_str_to_dict(cookies)
+    params = dict(API.params)
+    params["msToken"] = next((v for k, v in cookie_dict.items() if k.lower() == "mstoken"), "")
+    params["msToken"] = params.pop("msToken")
+    signed_query = DouYinParams().sign_url(
         "https://www.douyin.com/aweme/v1/web/user/profile/self/",
-        headers={"Cookie": cookies, "Referer": "https://www.douyin.com/"},
+        params, None, "GET", user_agent=USERAGENT,
     )
+    headers = dict(DATA_HEADERS)
+    headers["Cookie"] = cookies
+    uifid = next((v for k, v in cookie_dict.items() if k.lower() == "uifid"), "")
+    if uifid:
+        headers["uifid"] = uifid
+
+    url = (
+        f"https://www.douyin.com/aweme/v1/web/user/profile/self/?{signed_query}"
+        if signed_query
+        else "https://www.douyin.com/aweme/v1/web/user/profile/self/"
+    )
+    response = await session.get(url, headers=headers)
     response.raise_for_status()
     return map_user(require_authenticated_user(response.json()))
 
