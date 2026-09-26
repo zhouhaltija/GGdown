@@ -173,6 +173,7 @@ public partial class UsersViewModel : ObservableObject
         ShowAddUserCommand = new RelayCommand(() => ShowAddUserRequested?.Invoke());
         ShowImportCookieCommand = new RelayCommand(() => ShowImportCookieRequested?.Invoke());
         ShowFollowingListCommand = new RelayCommand(() => ShowFollowingListRequested?.Invoke(), () => CanShowFollowingList);
+        IncrementalDownloadCommand = new AsyncRelayCommand(DownloadIncrementalAsync);
         SelectAllCommand = new RelayCommand(() => SelectAll(true));
         DeselectAllCommand = new RelayCommand(() => SelectAll(false));
         InvertSelectionCommand = new RelayCommand(InvertSelection);
@@ -189,6 +190,9 @@ public partial class UsersViewModel : ObservableObject
     public bool HasUsers => _hasUsers;
     public bool HasAccount => _hasAccount;               // 驱动空状态引导与导入按钮
     public bool SupportsFollowingList => _currentSite.IsAvailable && _sites.IsRegistered(SiteId)
+        && _sites.Get(SiteId).SupportedKinds.Contains(ContentKind.UserMedia)
+        && SiteId == TwitterSiteProvider.Id;
+    public bool SupportsIncrementalDownload => _currentSite.IsAvailable && _sites.IsRegistered(SiteId)
         && _sites.Get(SiteId).SupportedKinds.Contains(ContentKind.UserMedia)
         && SiteId == TwitterSiteProvider.Id;
     public bool CanShowFollowingList => _hasAccount && SupportsFollowingList;
@@ -228,6 +232,7 @@ public partial class UsersViewModel : ObservableObject
     public IRelayCommand ShowAddUserCommand { get; }
     public IRelayCommand ShowImportCookieCommand { get; }
     public IRelayCommand ShowFollowingListCommand { get; }
+    public IAsyncRelayCommand IncrementalDownloadCommand { get; }
     public IRelayCommand SelectAllCommand { get; }
     public IRelayCommand DeselectAllCommand { get; }
     public IRelayCommand InvertSelectionCommand { get; }
@@ -301,6 +306,7 @@ public partial class UsersViewModel : ObservableObject
                 OnPropertyChanged(nameof(HasAccount));
                 OnPropertyChanged(nameof(CanShowFollowingList));
                 OnPropertyChanged(nameof(SupportsFollowingList));
+                OnPropertyChanged(nameof(SupportsIncrementalDownload));
                 OnPropertyChanged(nameof(ShowManualAddGuide));
                 OnPropertyChanged(nameof(IsSiteAvailable));
                 OnPropertyChanged(nameof(ShowComingSoon));
@@ -360,12 +366,39 @@ public partial class UsersViewModel : ObservableObject
             SelectAll(false);
     }
 
+    private async Task DownloadIncrementalAsync()
+    {
+        var selected = Users.Where(r => r.IsSelected).ToList();
+        List<User> candidates;
+        if (selected.Count > 0)
+        {
+            candidates = selected.Where(r => r.Model.DownloadCount > 0).Select(r => r.Model).ToList();
+            if (candidates.Count == 0)
+            {
+                StatusMessage = "所选用户下载次数均为 0";
+                return;
+            }
+        }
+        else
+        {
+            candidates = Users.Where(r => r.Model.DownloadCount > 0).Select(r => r.Model).ToList();
+            if (candidates.Count == 0)
+            {
+                StatusMessage = "没有下载次数大于 0 的用户";
+                return;
+            }
+        }
+
+        if (await DownloadUsersAsync(candidates, isIncremental: true) && selected.Count > 0)
+            SelectAll(false);
+    }
+
     private Task DownloadOneAsync(UserRowViewModel row) => DownloadUsersAsync([row.Model]);
 
     private Task DownloadHighlightsAsync(UserRowViewModel row) => DownloadUsersAsync([row.Model], ContentKind.UserHighlights);
 
     /// <returns>true：入队完成或全部被跳过（可清选中）；false：硬失败，保留勾选以便重试。</returns>
-    private async Task<bool> DownloadUsersAsync(IReadOnlyList<User> users, ContentKind? onlyKind = null)
+    private async Task<bool> DownloadUsersAsync(IReadOnlyList<User> users, ContentKind? onlyKind = null, bool isIncremental = false)
     {
         if (!_currentSite.IsAvailable)
         {
@@ -378,15 +411,16 @@ public partial class UsersViewModel : ObservableObject
         var toDownload = users.Where(u => !u.IsSkipped && !downloadingIds.Contains(u.Id)).ToList();
         if (toDownload.Count == 0)
         {
+            var targetPrefix = isIncremental ? "目标" : "选中";
             StatusMessage = users.Count == 1
                 ? downloadingIds.Contains(users[0].Id) && !users[0].IsSkipped
                     ? "该用户已在下载队列"
                     : "该用户已暂停下载"
                 : skippedDownloading > 0 && skippedPaused == 0
-                    ? "选中用户均在下载队列中"
+                    ? $"{targetPrefix}用户均在下载队列中"
                     : skippedDownloading > 0
-                        ? "选中用户均已暂停或已在下载队列"
-                        : "选中用户均已暂停下载";
+                        ? $"{targetPrefix}用户均已暂停或已在下载队列"
+                        : $"{targetPrefix}用户均已暂停下载";
             return true;
         }
 
@@ -435,9 +469,10 @@ public partial class UsersViewModel : ObservableObject
             var extras = new List<string>();
             if (skippedPaused > 0) extras.Add($"暂停 {skippedPaused} 个");
             if (skippedDownloading > 0) extras.Add($"跳过 {skippedDownloading} 个下载中");
+            var actionName = isIncremental ? "增量下载" : "下载";
             StatusMessage = extras.Count == 0
-                ? $"已加入下载队列（{toDownload.Count} 个用户）"
-                : $"已加入下载队列（{toDownload.Count} 个用户，{string.Join("，", extras)}）";
+                ? $"已加入{actionName}队列（{toDownload.Count} 个用户）"
+                : $"已加入{actionName}队列（{toDownload.Count} 个用户，{string.Join("，", extras)}）";
             return true;
         }
         catch (Exception ex) // EngineException 等

@@ -17,6 +17,8 @@
             <Button Content="关注列表" Command="{x:Bind Vm.ShowFollowingListCommand}"
                     IsEnabled="{x:Bind Vm.CanShowFollowingList, Mode=OneWay}"
                     Visibility="{x:Bind conv:UiConv.ToVisibility(Vm.SupportsFollowingList), Mode=OneWay}"/>
+            <Button Content="增量下载" Command="{x:Bind Vm.IncrementalDownloadCommand}"
+                    Visibility="{x:Bind conv:UiConv.ToVisibility(Vm.SupportsIncrementalDownload), Mode=OneWay}"/>
             <AutoSuggestBox PlaceholderText="搜索用户名/昵称" QueryIcon="Find"
                              Text="{x:Bind Vm.SearchText, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
                              Width="240"/>

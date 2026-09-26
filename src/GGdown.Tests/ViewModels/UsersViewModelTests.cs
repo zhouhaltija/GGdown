@@ -571,4 +571,68 @@ public class UsersViewModelTests : IDisposable
         await alice.OpenFolderCommand.ExecuteAsync(null);
         Assert.Contains("还没有", _vm.StatusMessage); // 只认 twitter 文件：pixiv 行不构成"有记录"
     }
+// ---- 增量下载功能测试 ----
+
+    [Fact]
+    public async Task SupportsIncrementalDownload_matches_twitter_site()
+    {
+        await _vm.RefreshCommand.ExecuteAsync(null);
+        Assert.True(_vm.SupportsIncrementalDownload);
+
+        await _site.SelectAsync("pixiv");
+        await Task.Delay(100);
+        Assert.False(_vm.SupportsIncrementalDownload);
+    }
+
+    [Fact]
+    public async Task IncrementalDownload_without_selection_enqueues_only_download_count_gt_zero()
+    {
+        await _vm.RefreshCommand.ExecuteAsync(null);
+        Assert.Equal(0, _vm.SelectedCount);
+
+        await _vm.IncrementalDownloadCommand.ExecuteAsync(null);
+        Assert.Contains("已加入增量下载队列（1 个用户）", _vm.StatusMessage);
+
+        var jobs = await _db.Jobs.ToListAsync();
+        var alice = _vm.Users.Single(u => u.Model.ScreenName == "alice");
+        var bob = _vm.Users.Single(u => u.Model.ScreenName == "bob");
+        Assert.Contains(jobs, j => j.UserId == alice.Model.Id);
+        Assert.DoesNotContain(jobs, j => j.UserId == bob.Model.Id);
+    }
+
+    [Fact]
+    public async Task IncrementalDownload_with_selection_enqueues_only_selected_gt_zero_and_clears_selection()
+    {
+        await _vm.RefreshCommand.ExecuteAsync(null);
+        foreach (var u in _vm.Users)
+            u.IsSelected = true;
+        Assert.Equal(2, _vm.SelectedCount);
+
+        await _vm.IncrementalDownloadCommand.ExecuteAsync(null);
+        Assert.Contains("已加入增量下载队列（1 个用户）", _vm.StatusMessage);
+        Assert.Equal(0, _vm.SelectedCount);
+    }
+
+    [Fact]
+    public async Task IncrementalDownload_with_selection_when_all_selected_have_zero_download_count()
+    {
+        await _vm.RefreshCommand.ExecuteAsync(null);
+        var bob = _vm.Users.Single(u => u.Model.ScreenName == "bob");
+        bob.IsSelected = true;
+
+        await _vm.IncrementalDownloadCommand.ExecuteAsync(null);
+        Assert.Equal("所选用户下载次数均为 0", _vm.StatusMessage);
+        Assert.True(bob.IsSelected);
+    }
+
+    [Fact]
+    public async Task IncrementalDownload_without_selection_when_all_users_have_zero_download_count()
+    {
+        _db.Users.Single(u => u.ScreenName == "alice").DownloadCount = 0;
+        await _db.SaveChangesAsync();
+
+        await _vm.RefreshCommand.ExecuteAsync(null);
+        await _vm.IncrementalDownloadCommand.ExecuteAsync(null);
+        Assert.Equal("没有下载次数大于 0 的用户", _vm.StatusMessage);
+    }
 }
