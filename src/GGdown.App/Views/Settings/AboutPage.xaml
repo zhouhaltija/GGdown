@@ -13,7 +13,6 @@
                     <TextBlock Text="GitHub 仓库（Phase C 配置）" VerticalAlignment="Center" Opacity="0.8"/>
                 </StackPanel>
             </controls:SettingsCard>
-            <TextBlock Text="{x:Bind Vm.StatusMessage, Mode=OneWay}" Opacity="0.8" Margin="0,4,0,0"/>
         </StackPanel>
     </ScrollViewer>
 </Page>

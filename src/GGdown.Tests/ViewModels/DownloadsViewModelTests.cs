@@ -148,6 +148,39 @@ public class DownloadsViewModelTests : IDisposable
         Assert.Equal(JobStatus.Completed, job.Status);
     }
 
+    // 终态任务进入「最近完成」（离页期间结束的也算）；清除记录只清当前视图
+    [Fact]
+    public async Task Finished_jobs_are_kept_in_recent_list_until_cleared()
+    {
+        _engine.OnDownload = (plan, cookies, progress, _) =>
+        {
+            progress.Report(new EngineEvent("job-done", Total: 0, Skipped: 0, Failed: 0));
+            return Task.CompletedTask;
+        };
+        _vm.Stop(); // 离页状态下结束
+        await _queue.EnqueueUserMediaAsync(_account, [_alice], @"D:\dl", Opts());
+        await WaitUntil(() => _vm.Finished.Count == 1);
+        Assert.True(_vm.HasFinished);
+        Assert.True(_vm.Finished[0].IsFinished);
+        Assert.Contains("1", _vm.FinishedHeader);
+        Assert.False(_vm.ShowEmptyState);
+
+        _vm.ClearFinishedCommand.Execute(null);
+        Assert.Empty(_vm.Finished);
+        Assert.True(_vm.ShowEmptyState);
+    }
+
+    [Fact]
+    public void Twitter_shows_single_link_input()
+    {
+        Assert.True(_vm.SupportsSearch);
+        Assert.True(_vm.SupportsPermalink);
+        Assert.False(_vm.ShowPermalinkInput); // 搜索框已兼容推文/列表链接
+        Assert.True(_vm.ShowNewDownloadPanel);
+        _vm.SetGlobalView(true);
+        Assert.False(_vm.ShowNewDownloadPanel); // 全局视图只管队列
+    }
+
     // ④ CancelAsync 路径（OnDownload 挂起 + 卡片取消按钮 → 卡片移除、任务标 Canceled）
     [Fact]
     public async Task Cancel_from_card_removes_card_and_cancels_job()

@@ -214,6 +214,34 @@ public class DownloadQueueServiceTests : IDisposable
     }
 
     [Fact]
+    public async Task Cancel_pending_job_removes_it_without_starting_download()
+    {
+        var gate = new TaskCompletionSource();
+        _engine.OnDownload = async (_, _, _, ct) => await gate.Task.WaitAsync(ct);
+        var bob = new User
+        { SiteId = "twitter", RestId = "2", ScreenName = "bob", AddedAt = DateTime.UtcNow, UpdatedAt = DateTime.UtcNow };
+        _db.Users.Add(bob);
+        await _db.SaveChangesAsync();
+        var removed = new List<JobSnapshot>();
+        _queue.JobRemoved += snapshot => removed.Add(snapshot);
+
+        await _queue.EnqueueUserMediaAsync(_account, [_alice, bob], @"D:\dl", Opts());
+        await WaitUntil(() => _queue.Active.Any(j => j.Status == JobStatus.Running)
+            && _queue.Active.Any(j => j.Status == JobStatus.Pending));
+        var pending = _queue.Active.Single(j => j.Status == JobStatus.Pending);
+
+        await _queue.CancelAsync(pending.JobId);
+
+        Assert.DoesNotContain(_queue.Active, j => j.JobId == pending.JobId);
+        Assert.Equal(JobStatus.Canceled,
+            (await _db.Jobs.AsNoTracking().SingleAsync(j => j.Id == pending.JobId)).Status);
+        Assert.Contains(removed, j => j.JobId == pending.JobId && j.Status == JobStatus.Canceled);
+        gate.SetResult();
+        await WaitUntil(() => _queue.Active.Count == 0);
+        Assert.DoesNotContain(_engine.Downloads, d => d.Plan.Urls.Contains("https://x.com/bob/media"));
+    }
+
+    [Fact]
     public async Task Auth_failure_fails_job_and_flags_account()
     {
         long? flagged = null;

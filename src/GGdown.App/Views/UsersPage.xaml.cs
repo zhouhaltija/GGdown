@@ -26,6 +26,61 @@ public sealed partial class UsersPage : Page
         Vm.ShowAddUserRequested += OnShowAddUserRequested;
         Vm.ShowImportCookieRequested += OnShowImportCookieRequested;
         Vm.ShowFollowingListRequested += OnShowFollowingListRequested;
+        Vm.EditUserDateRequested += OnEditUserDateRequested;
+        Vm.ConfirmDeleteAsync = ConfirmDeleteAsync;
+    }
+
+    // 删除确认：删的是库里的用户记录，已下载的文件不受影响
+    private async Task<bool> ConfirmDeleteAsync(int count)
+    {
+        var dialog = new ContentDialog
+        {
+            XamlRoot = App.Current.MainWindow.DialogXamlRoot,
+            Title = count == 1 ? "删除这个用户？" : $"删除 {count} 个用户？",
+            Content = "将从列表中移除，已下载到磁盘的文件不会被删除。",
+            PrimaryButtonText = "删除",
+            CloseButtonText = "取消",
+            DefaultButton = ContentDialogButton.Close,
+        };
+        return await dialog.ShowAsync() == ContentDialogResult.Primary;
+    }
+
+    private async void OnEditUserDateRequested(UserRowViewModel row)
+    {
+        try
+        {
+            var picker = new CalendarDatePicker { PlaceholderText = "选择最早发布日期" };
+            if (row.Model.DownloadSince is { } since)
+                picker.Date = new DateTimeOffset(since.Year, since.Month, since.Day, 0, 0, 0, TimeSpan.Zero);
+            var content = new StackPanel { Spacing = 10 };
+            content.Children.Add(new TextBlock
+            {
+                Text = "只下载此日期及之后发布的作品。未单独设置时使用抖音站点选项中的日期。",
+                TextWrapping = TextWrapping.Wrap,
+            });
+            content.Children.Add(picker);
+            var dialog = new ContentDialog
+            {
+                XamlRoot = App.Current.MainWindow.DialogXamlRoot,
+                Title = $"{row.Title} · 日期限制",
+                Content = content,
+                PrimaryButtonText = "保存",
+                SecondaryButtonText = "使用站点默认",
+                CloseButtonText = "取消",
+                DefaultButton = ContentDialogButton.Primary,
+            };
+            var result = await dialog.ShowAsync();
+            if (result == ContentDialogResult.Secondary)
+                await Vm.SetUserDownloadSinceAsync(row.Model.Id, null);
+            else if (result == ContentDialogResult.Primary && picker.Date is { } selected)
+                await Vm.SetUserDownloadSinceAsync(row.Model.Id, DateOnly.FromDateTime(selected.DateTime));
+            else if (result == ContentDialogResult.Primary)
+                Vm.StatusMessage = "请选择日期，或使用站点默认";
+        }
+        catch (Exception ex)
+        {
+            Vm.StatusMessage = $"设置日期限制失败：{ex.Message}";
+        }
     }
 
     protected override async void OnNavigatedTo(NavigationEventArgs e)

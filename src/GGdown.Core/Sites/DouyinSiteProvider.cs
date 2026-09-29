@@ -1,4 +1,6 @@
+using System.Globalization;
 using System.Text.RegularExpressions;
+using GGdown.Data;
 
 namespace GGdown.Sites;
 
@@ -23,10 +25,13 @@ public sealed partial class DouyinSiteProvider : ISiteProvider
     public string InputHint => "用户主页、sec_user_id 或作品链接，如 https://www.douyin.com/user/MS4w...";
 
     public OptionSchema OptionsSchema { get; } = new(
-        [new OptionField("original_quality", OptionKind.Boolean, false, "最高质量视频")]);
+    [
+        new OptionField("original_quality", OptionKind.Boolean, false, "最高质量视频"),
+        new OptionField("earliest_date", OptionKind.Text, "", "最早发布日期（yyyy-MM-dd）"),
+    ]);
 
     public IReadOnlyDictionary<string, object?> DefaultOptions { get; } =
-        new Dictionary<string, object?> { ["original_quality"] = false };
+        new Dictionary<string, object?> { ["original_quality"] = false, ["earliest_date"] = "" };
 
     public UserInputParseResult ParseInput(string input)
     {
@@ -100,11 +105,31 @@ public sealed partial class DouyinSiteProvider : ISiteProvider
 
         var quality = options.TryGetValue("original_quality", out var selected)
             && selected is bool enabled && enabled;
+        DateOnly? siteSince = null;
+        if (kind == ContentKind.UserMedia && options.TryGetValue("earliest_date", out var dateValue)
+            && dateValue is string dateText && !string.IsNullOrWhiteSpace(dateText))
+        {
+            if (!DateOnly.TryParseExact(dateText.Trim(), "yyyy-MM-dd", CultureInfo.InvariantCulture,
+                    DateTimeStyles.None, out var parsedDate))
+                throw new ArgumentException("最早发布日期须为 yyyy-MM-dd", nameof(options));
+            siteSince = parsedDate;
+        }
+        var selection = kind == ContentKind.UserMedia ? target.ContentSelection : UserContentSelection.All;
+        var mediaFilter = selection switch
+        {
+            UserContentSelection.DouyinVideos => "videos",
+            UserContentSelection.DouyinGalleries => "galleries",
+            _ => "all",
+        };
         var douyinOptions = new Dictionary<string, object?>
         {
             ["cookies"] = paths.CookiesFile,
             ["archive"] = paths.ArchiveFile,
             ["original_quality"] = quality,
+            ["media_filter"] = mediaFilter,
+            ["earliest_date"] = kind == ContentKind.UserMedia
+                ? (target.DownloadSince ?? siteSince)?.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture) ?? ""
+                : "",
         };
         var nested = new Dictionary<string, object?>
         {

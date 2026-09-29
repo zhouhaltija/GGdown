@@ -56,6 +56,54 @@ public sealed partial class JobCardViewModel : ObservableObject
 
     public IRelayCommand CancelCommand { get; }
 
+    private IRelayCommand? _openFolderCommand;
+    /// <summary>在资源管理器中定位最近写入的文件（文件已不在则打开其目录）。</summary>
+    public IRelayCommand OpenFolderCommand => _openFolderCommand ??= new RelayCommand(OpenFolder, () => CanOpenFolder);
+
+    private string? _errorText;
+    /// <summary>失败原因（仅失败终态有值）：任务结束后卡片保留在「最近完成」，失败不再悄无声息。</summary>
+    public string? ErrorText { get => _errorText; private set => SetProperty(ref _errorText, value); }
+
+    private bool _isFailed;
+    public bool IsFailed { get => _isFailed; private set => SetProperty(ref _isFailed, value); }
+
+    public bool HasError => !string.IsNullOrWhiteSpace(ErrorText);
+
+    public bool CanOpenFolder
+    {
+        get
+        {
+            if (string.IsNullOrWhiteSpace(CurrentFile)) return false;
+            try
+            {
+                var full = Path.GetFullPath(CurrentFile);
+                return File.Exists(full) || Directory.Exists(Path.GetDirectoryName(full));
+            }
+            catch (Exception) { return false; }
+        }
+    }
+
+    private void OpenFolder()
+    {
+        if (!CanOpenFolder) return;
+        try
+        {
+            var full = Path.GetFullPath(CurrentFile!);
+            if (File.Exists(full))
+                System.Diagnostics.Process.Start("explorer.exe", $"/select,\"{full}\"");
+            else if (Path.GetDirectoryName(full) is { } dir)
+                System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo
+                {
+                    FileName = "explorer.exe",
+                    ArgumentList = { dir },
+                });
+        }
+        catch (Exception)
+        {
+            // 资源管理器启动失败无需打断用户（与行内其他外部打开操作一致：静默）
+        }
+    }
+
     public void Update(JobSnapshot snapshot)
     {
         Title = snapshot.Title;
@@ -95,6 +143,11 @@ public sealed partial class JobCardViewModel : ObservableObject
             && File.Exists(file)
             && ext is ".jpg" or ".jpeg" or ".png" or ".gif" or ".webp" or ".bmp";
         PreviewPath = HasPreview ? file : null;
+        IsFailed = snapshot.Status == JobStatus.Failed;
+        ErrorText = IsFailed ? snapshot.Error : null;
+        OnPropertyChanged(nameof(HasError));
+        OnPropertyChanged(nameof(CanOpenFolder));
+        _openFolderCommand?.NotifyCanExecuteChanged();
     }
 
     private string? _previewPath;
@@ -121,7 +174,7 @@ public sealed class AccountContentActionViewModel
 /// 下载页 VM（B5）：活动任务卡片列表 + 账号内容（喜欢/书签）入口。
 /// 事件处理器先经 _dispatcher.Post 再操作集合与 Update（控制器裁定 2）。
 /// </summary>
-public partial class DownloadsViewModel : ObservableObject
+public partial class DownloadsViewModel : StatusViewModel
 {
     private static readonly ContentKind[] AccountKinds =
         [ContentKind.AccountLikes, ContentKind.AccountBookmarks, ContentKind.AccountNovelBookmarks];
@@ -150,7 +203,67 @@ public partial class DownloadsViewModel : ObservableObject
     {
         if (IsGlobalView == value) return;
         IsGlobalView = value;
-        _dispatcher.Post(RebuildVisibleJobs);
+        _dispatcher.Post(() =>
+        {
+            NotifyViewMode();
+            RebuildVisibleJobs();
+            RebuildFinished();
+        });
+    }
+
+    /// <summary>平台视图才显示"新建下载"输入区；全局视图只管队列。</summary>
+    public bool IsPlatformView => !IsGlobalView;
+    public bool ShowNewDownloadPanel => IsPlatformView
+        && (SupportsAccountContent || SupportsSearch || ShowPermalinkInput);
+
+    private void NotifyViewMode()
+    {
+        OnPropertyChanged(nameof(IsGlobalView));
+        OnPropertyChanged(nameof(IsPlatformView));
+        OnPropertyChanged(nameof(ShowNewDownloadPanel));
+        OnPropertyChanged(nameof(ShowComingSoon));
+    }
+
+    // —— 最近完成：队列在终态即移出 Active，这里在会话内保留终态卡片（失败原因、打开目录） ——
+
+    private const int FinishedCap = 100;
+    private readonly List<JobSnapshot> _finishedAll = []; // 全部平台，新的在前（仅 UI 线程访问）
+
+    public ObservableCollection<JobCardViewModel> Finished { get; } = [];
+    public bool HasFinished => Finished.Count > 0;
+    public string FinishedHeader => $"最近完成（{Finished.Count}）";
+    public bool ShowEmptyState => Jobs.Count == 0 && Finished.Count == 0 && !ShowComingSoon;
+    public IRelayCommand ClearFinishedCommand { get; }
+
+    private void OnJobFinished(JobSnapshot snapshot)
+        => _dispatcher.Post(() =>
+        {
+            _finishedAll.RemoveAll(s => s.JobId == snapshot.JobId);
+            _finishedAll.Insert(0, snapshot);
+            if (_finishedAll.Count > FinishedCap) _finishedAll.RemoveRange(FinishedCap, _finishedAll.Count - FinishedCap);
+            RebuildFinished();
+        });
+
+    private void RebuildFinished()
+    {
+        Finished.Clear();
+        foreach (var s in _finishedAll.Where(MatchesFilter))
+            Finished.Add(new JobCardViewModel(s, _ => Task.CompletedTask));
+        NotifyFinished();
+    }
+
+    private void ClearFinished()
+    {
+        // 只清当前视图可见的那部分（平台视图不误清其他平台的记录）
+        _finishedAll.RemoveAll(MatchesFilter);
+        RebuildFinished();
+    }
+
+    private void NotifyFinished()
+    {
+        OnPropertyChanged(nameof(HasFinished));
+        OnPropertyChanged(nameof(FinishedHeader));
+        OnPropertyChanged(nameof(ShowEmptyState));
     }
 
     public DownloadsViewModel(IDownloadQueueService queue, IAccountQueryService accountQuery,
@@ -165,8 +278,12 @@ public partial class DownloadsViewModel : ObservableObject
         _currentSite.Changed += () => _dispatcher.Post(() =>
         {
             IsGlobalView = false; // 平台切换复位全局下载视图（单平台头下不得显示全平台任务）
+            NotifyViewMode();
             NotifySite();
         });
+        // 常驻订阅（VM 为 singleton）：离开下载页期间结束的任务也要进「最近完成」
+        _queue.JobRemoved += OnJobFinished;
+        ClearFinishedCommand = new RelayCommand(ClearFinished);
 
         DownloadLikesCommand = new AsyncRelayCommand(() => DownloadAccountContentAsync(ContentKind.AccountLikes));
         DownloadBookmarksCommand = new AsyncRelayCommand(() => DownloadAccountContentAsync(ContentKind.AccountBookmarks));
@@ -182,9 +299,6 @@ public partial class DownloadsViewModel : ObservableObject
 
     private bool _hasAccount;
     public bool HasAccount { get => _hasAccount; private set => SetProperty(ref _hasAccount, value); }
-
-    [ObservableProperty]
-    private string? _statusMessage;   // 操作结果反馈（成功/失败一行话）
 
     [ObservableProperty]
     private string? _searchQuery;
@@ -206,7 +320,9 @@ public partial class DownloadsViewModel : ObservableObject
         && _sites.Get(SiteId).SupportedKinds.Contains(ContentKind.Search);
     public bool SupportsPermalink => _currentSite.IsAvailable && _sites.IsRegistered(SiteId)
         && _sites.Get(SiteId).SupportedKinds.Contains(ContentKind.Permalink);
-    public bool ShowComingSoon => !_currentSite.IsAvailable;
+    /// <summary>Twitter 的搜索框已能识别推文/列表链接，同时支持两者时只留一个输入框。</summary>
+    public bool ShowPermalinkInput => SupportsPermalink && !SupportsSearch;
+    public bool ShowComingSoon => IsPlatformView && !_currentSite.IsAvailable;
     public string ComingSoonMessage => $"{_currentSite.Current.DisplayName} 即将支持，该站点尚未开放下载。";
 
     private void NotifySite()
@@ -215,10 +331,13 @@ public partial class DownloadsViewModel : ObservableObject
         OnPropertyChanged(nameof(SupportsAccountContent));
         OnPropertyChanged(nameof(SupportsSearch));
         OnPropertyChanged(nameof(SupportsPermalink));
+        OnPropertyChanged(nameof(ShowPermalinkInput));
         OnPropertyChanged(nameof(ShowComingSoon));
         OnPropertyChanged(nameof(ComingSoonMessage));
         RebuildAccountActions();
+        OnPropertyChanged(nameof(ShowNewDownloadPanel));
         RebuildVisibleJobs();
+        RebuildFinished();
         _ = RefreshHasAccountAsync();
     }
 
@@ -318,7 +437,11 @@ public partial class DownloadsViewModel : ObservableObject
             Jobs.Add(new JobCardViewModel(snapshot, CancelJobAsync));
     }
 
-    private void UpdateHasActive() => HasActive = Jobs.Count > 0;
+    private void UpdateHasActive()
+    {
+        HasActive = Jobs.Count > 0;
+        OnPropertyChanged(nameof(ShowEmptyState));
+    }
 
     // 卡片取消按钮回调（卡片 RelayCommand 内 fire-and-forget），异常落 StatusMessage 不崩线程
     private async Task CancelJobAsync(long jobId)
@@ -384,6 +507,7 @@ public partial class DownloadsViewModel : ObservableObject
             var dir = await _settings.GetDownloadDirectoryAsync();
             var siteOptions = await _settings.GetSiteOptionsAsync(SiteId);
             await _queue.EnqueuePermalinkAsync(account, url, title, kind, dir, siteOptions);
+            SearchQuery = null; // 入队成功清空输入，便于连续粘贴下一条
             StatusMessage = $"已加入下载队列：{title}";
         }
         catch (Exception ex)
@@ -429,6 +553,7 @@ public partial class DownloadsViewModel : ObservableObject
             };
             await _queue.EnqueuePermalinkAsync(account, parsed.DirectUrl, title,
                 ContentKind.Permalink, dir, siteOptions);
+            PermalinkInput = null;
             StatusMessage = $"已加入下载队列：{title}";
         }
         catch (Exception ex)

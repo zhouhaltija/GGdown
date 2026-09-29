@@ -90,12 +90,14 @@
                                 Background="{ThemeResource SubtleFillColorSecondaryBrush}">
                             <TextBlock Text="{x:Bind StatusText}" FontSize="12"/>
                         </Border>
-                        <Button Grid.Column="6" Content="打开所在文件夹" Padding="8,2"
-                                Command="{x:Bind OpenContainingFolderCommand}" VerticalAlignment="Center"/>
+                        <Button Grid.Column="6" Padding="8,4" VerticalAlignment="Center"
+                                ToolTipService.ToolTip="打开所在文件夹" AutomationProperties.Name="打开所在文件夹"
+                                Command="{x:Bind OpenContainingFolderCommand}">
+                            <FontIcon Glyph="&#xE838;" FontSize="14"/>
+                        </Button>
                     </Grid>
                 </DataTemplate>
             </ListView.ItemTemplate>
         </ListView>
-        <TextBlock Grid.Row="2" Padding="12,8" Opacity="0.8" Text="{x:Bind Vm.StatusMessage, Mode=OneWay}"/>
     </Grid>
 </Page>

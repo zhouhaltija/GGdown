@@ -137,6 +137,55 @@ public class MainNavViewModelTests
     }
 
     [Fact]
+    public async Task Restore_selects_last_platform_and_its_last_page()
+    {
+        var settings = new FakeAppSettings();
+        await settings.SetCurrentSiteIdAsync("pixiv");
+        await settings.SetSiteLastPageAsync("pixiv", "history");
+        var vm = Create(new FakeCurrentSite(), settings);
+        await vm.StartAsync();
+        Assert.Equal("pixiv", await vm.RestoreLastPlatformAsync());
+        Assert.True(vm.Platforms.Single(p => p.SiteId == "pixiv").IsSelected);
+        Assert.Equal(SitePageKey.History, vm.CurrentTabs.Single(t => t.IsSelected).Key);
+    }
+
+    [Fact]
+    public async Task Restore_falls_back_to_first_visible_platform()
+    {
+        var settings = new FakeAppSettings();
+        await settings.SetCurrentSiteIdAsync("pixiv");
+        await settings.SetVisibleSitesAsync(["twitter"]);
+        var vm = Create(new FakeCurrentSite(), settings);
+        await vm.StartAsync();
+        Assert.Equal("twitter", await vm.RestoreLastPlatformAsync());
+    }
+
+    [Fact]
+    public async Task Global_downloads_clears_platform_highlight_and_tabs()
+    {
+        var vm = Create(new FakeCurrentSite());
+        await vm.StartAsync();
+        await vm.SelectPlatformAsync("twitter");
+        vm.EnterGlobalDownloads();
+        Assert.True(vm.IsGlobalDownloads);
+        Assert.All(vm.Platforms, p => Assert.False(p.IsSelected));
+        Assert.Empty(vm.CurrentTabs);
+
+        await vm.SelectPlatformAsync("twitter");
+        Assert.False(vm.IsGlobalDownloads);
+        Assert.Equal(4, vm.CurrentTabs.Count);
+    }
+
+    [Fact]
+    public async Task Site_settings_tab_is_not_named_like_global_settings()
+    {
+        var vm = Create(new FakeCurrentSite());
+        await vm.StartAsync();
+        await vm.SelectPlatformAsync("twitter");
+        Assert.Equal("账号与选项", vm.CurrentTabs.Single(t => Equals(t.Key, SitePageKey.SiteSettings)).Title);
+    }
+
+    [Fact]
     public async Task Reload_without_selection_does_not_auto_select()
     {
         var settings = new FakeAppSettings();

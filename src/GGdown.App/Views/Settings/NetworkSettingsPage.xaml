@@ -22,10 +22,9 @@
                     <TextBox PlaceholderText="密码（可选）" Text="{x:Bind Vm.ProxyPassword, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
                              MinWidth="100" VerticalAlignment="Center"/>
                     <Button Content="保存" Style="{StaticResource AccentButtonStyle}"
-                            Command="{x:Bind Vm.SaveGeneralCommand}"/>
+                            Command="{x:Bind Vm.SaveProxyCommand}"/>
                 </StackPanel>
             </controls:SettingsCard>
-            <TextBlock Text="{x:Bind Vm.StatusMessage, Mode=OneWay}" Opacity="0.8" Margin="0,4,0,0"/>
         </StackPanel>
     </ScrollViewer>
 </Page>

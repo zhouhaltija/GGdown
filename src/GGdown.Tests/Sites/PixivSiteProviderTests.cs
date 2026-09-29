@@ -56,6 +56,10 @@ public class PixivSiteProviderTests
         Assert.Contains("pixiv-novel", ext.Keys);
         var pixiv = (IReadOnlyDictionary<string, object?>)ext["pixiv"]!;
         var novel = (IReadOnlyDictionary<string, object?>)ext["pixiv-novel"]!;
+        Assert.Equal(new[] { "pixiv", "{user[id]} {user[account]}", "artworks" }, pixiv["directory"]);
+        var novelPlanOptions = (IReadOnlyDictionary<string, object?>)novels.Options["extractor"]!;
+        var novelExtractor = (IReadOnlyDictionary<string, object?>)novelPlanOptions["pixiv-novel"]!;
+        Assert.Equal(new[] { "pixiv", "{user[id]} {user[account]}", "novels" }, novelExtractor["directory"]);
         Assert.Equal(@"C:\a\cookies.txt", pixiv["cookies"]);
         Assert.Equal(@"C:\arc\1.txt", pixiv["archive"]);
         Assert.True((bool)pixiv["ugoira"]!);
@@ -84,11 +88,10 @@ public class PixivSiteProviderTests
     }
 
     [Fact]
-    public void Schema_includes_enqueue_toggles()
+    public void Schema_keeps_media_options_but_moves_content_choice_to_user()
     {
-        Assert.Contains(_site.OptionsSchema.Fields, f => f.Key == "download_artworks" && f.Kind == OptionKind.Boolean);
-        Assert.Contains(_site.OptionsSchema.Fields, f => f.Key == "download_novels" && f.Kind == OptionKind.Boolean);
-        Assert.True((bool)_site.DefaultOptions["download_artworks"]!);
-        Assert.True((bool)_site.DefaultOptions["download_novels"]!);
+        Assert.DoesNotContain(_site.OptionsSchema.Fields, f => f.Key is "download_artworks" or "download_novels");
+        Assert.Contains(_site.OptionsSchema.Fields, f => f.Key == "ugoira");
+        Assert.Contains(_site.OptionsSchema.Fields, f => f.Key == "novel_covers");
     }
 }

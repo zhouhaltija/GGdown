@@ -14,7 +14,7 @@ namespace GGdown.ViewModels;
 /// Shell 交互经事件解耦（Core 不引用 UI/Shell）：OpenFolderPickerRequested→页面 FileDialogService、
 /// OpenFolderRequested→页面 LauncherService。
 /// </summary>
-public partial class GlobalSettingsViewModel : ObservableObject
+public partial class GlobalSettingsViewModel : StatusViewModel
 {
     private readonly IAppSettings _settings;
     private readonly IDownloadEngine _engine;
@@ -45,9 +45,6 @@ public partial class GlobalSettingsViewModel : ObservableObject
 
     [ObservableProperty]
     private double _concurrency;          // NumberBox 绑定，保存时取整钳制
-
-    [ObservableProperty]
-    private string? _statusMessage;       // 操作结果反馈（成功/失败一行话）
 
     public IReadOnlyList<string> ProxySchemeChoices { get; } = ["http", "socks5", "socks5h"];
 
@@ -96,7 +93,9 @@ public partial class GlobalSettingsViewModel : ObservableObject
             var engineVersion = await ProbeEngineAsync();
             _dispatcher.Post(() =>
             {
+                _loadingConcurrency = true; // 载入回填不算用户修改，不触发自动保存
                 Concurrency = concurrency;
+                _loadingConcurrency = false;
                 DownloadDirectory = directory;
                 ProxyScheme = proxyScheme;
                 ProxyHost = proxy.Host;
@@ -130,6 +129,7 @@ public partial class GlobalSettingsViewModel : ObservableObject
     public async Task SetDownloadDirectoryAsync(string path)
     {
         if (string.IsNullOrWhiteSpace(path)) return;
+        await _saveGate.WaitAsync();
         try
         {
             await _settings.SetDownloadDirectoryAsync(path);
@@ -140,10 +140,64 @@ public partial class GlobalSettingsViewModel : ObservableObject
         {
             StatusMessage = $"保存失败：{ex.Message}";
         }
+        finally { _saveGate.Release(); }
+    }
+
+    // —— 并发数改动即保存（通用页无「保存」按钮）——
+
+    private bool _loadingConcurrency;
+    private readonly SemaphoreSlim _saveGate = new(1, 1);
+
+    partial void OnConcurrencyChanged(double value)
+    {
+        if (_loadingConcurrency || double.IsNaN(value)) return; // NumberBox 清空时为 NaN：不保存
+        _ = SaveConcurrencyAsync(value);
+    }
+
+    private async Task SaveConcurrencyAsync(double value)
+    {
+        await _saveGate.WaitAsync(); // 串行化各处保存：自动保存与按钮保存不并发写库
+        try
+        {
+            var n = Math.Max(1, (int)Math.Round(value));
+            await _settings.SetConcurrencyAsync(n);
+            _queue.Concurrency = n;
+            StatusMessage = $"已保存：并发下载数 {n}";
+        }
+        catch (Exception ex)
+        {
+            StatusMessage = $"保存失败：{ex.Message}";
+        }
+        finally { _saveGate.Release(); }
+    }
+
+    /// <summary>网络页「保存」：只保存代理（不连带写入其他页的字段）。</summary>
+    public IAsyncRelayCommand SaveProxyCommand => _saveProxyCommand ??= new AsyncRelayCommand(SaveProxyAsync);
+    private IAsyncRelayCommand? _saveProxyCommand;
+
+    private async Task SaveProxyAsync()
+    {
+        await _saveGate.WaitAsync(); // 串行化各处保存：自动保存与按钮保存不并发写库
+        try
+        {
+            await _settings.SetProxyAsync(new ProxyConfig(
+                ProxyScheme,
+                ProxyHost.Trim(),
+                (int)Math.Round(double.IsNaN(ProxyPort) ? 0 : ProxyPort),
+                string.IsNullOrWhiteSpace(ProxyUsername) ? null : ProxyUsername.Trim(),
+                string.IsNullOrWhiteSpace(ProxyPassword) ? null : ProxyPassword));
+            StatusMessage = string.IsNullOrWhiteSpace(ProxyHost) ? "已保存：直连（不使用代理）" : "已保存代理设置";
+        }
+        catch (Exception ex)
+        {
+            StatusMessage = $"保存失败：{ex.Message}";
+        }
+        finally { _saveGate.Release(); }
     }
 
     private async Task SaveGeneralAsync()
     {
+        await _saveGate.WaitAsync(); // 串行化各处保存：自动保存与按钮保存不并发写库
         try
         {
             var n = Math.Max(1, (int)Math.Round(Concurrency)); // <1 钳制（裁定 4）
@@ -163,5 +217,6 @@ public partial class GlobalSettingsViewModel : ObservableObject
         {
             StatusMessage = $"保存失败：{ex.Message}";
         }
+        finally { _saveGate.Release(); }
     }
 }

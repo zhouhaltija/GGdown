@@ -33,15 +33,25 @@ public class UsersPageXamlTests
     public void Toolbar_has_select_all_deselect_and_invert_buttons()
     {
         var xaml = File.ReadAllText(Path.Combine(AppContext.BaseDirectory, "XamlFixtures", "UsersPage.xaml"));
-        Assert.Contains("Content=\"全选\"", xaml);
-        Assert.Contains("Content=\"取消全选\"", xaml);
-        Assert.Contains("Content=\"反选\"", xaml);
+        // 全选/取消全选/反选收进「选择」下拉菜单
+        Assert.Contains("Text=\"全选\"", xaml);
+        Assert.Contains("Text=\"取消全选\"", xaml);
+        Assert.Contains("Text=\"反选\"", xaml);
         Assert.Contains("SelectAllCommand", xaml);
         Assert.Contains("DeselectAllCommand", xaml);
         Assert.Contains("InvertSelectionCommand", xaml);
         Assert.Contains("从剪贴板添加", xaml);
-        Assert.Contains("刷新资料", xaml);
+        Assert.Contains("RefreshProfilesText", xaml);
         Assert.Contains("DownloadHighlightsCommand", xaml);
+    }
+
+    [Fact]
+    public void Row_secondary_actions_live_in_more_menu()
+    {
+        var xaml = File.ReadAllText(Path.Combine(AppContext.BaseDirectory, "XamlFixtures", "UsersPage.xaml"));
+        Assert.Contains("更多操作", xaml);
+        Assert.Contains("MenuFlyoutItem Text=\"删除…\"", xaml);
+        Assert.DoesNotContain("Content=\"暂停选中\"", xaml);
     }
 
     [Fact]

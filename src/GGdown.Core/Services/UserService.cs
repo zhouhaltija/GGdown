@@ -23,6 +23,8 @@ public interface IUserService
     Task SetPinnedAsync(string siteId, long userId, bool pinned, CancellationToken ct = default);
     Task SetSkippedAsync(string siteId, IReadOnlyList<long> userIds, bool skipped, CancellationToken ct = default);
     Task SetInDownloadListAsync(string siteId, IReadOnlyList<long> userIds, bool inList, CancellationToken ct = default);
+    Task SetContentSelectionAsync(string siteId, long userId, UserContentSelection selection, CancellationToken ct = default);
+    Task SetDownloadSinceAsync(string siteId, long userId, DateOnly? since, CancellationToken ct = default);
 }
 
 public sealed class UserService(
@@ -131,7 +133,11 @@ public sealed class UserService(
     {
         var provider = sites.Get(account.SiteId);
         var parsed = provider.ParseInput(input);
-        if (!parsed.Ok || parsed.ScreenName is null)
+        // 抖音短链需由引擎展开后才能区分用户主页与作品；引擎的 user_info 会校验最终类型。
+        var isDouyinShortLink = account.SiteId == DouyinSiteProvider.Id
+            && parsed.Kind == PasteKind.Work
+            && parsed.DirectUrl?.StartsWith("https://v.douyin.com/", StringComparison.Ordinal) == true;
+        if (!parsed.Ok || (parsed.ScreenName is null && !isDouyinShortLink))
             throw new ArgumentException(parsed.Error ?? "无法识别输入", nameof(input));
         var info = await engine.GetUserInfoAsync(
             account.SiteId, AccountService.AbsoluteCookiePath(paths, account), input, ct);
@@ -194,6 +200,29 @@ public sealed class UserService(
         if (inList)
             q = q.Where(u => !u.IsSkipped);
         await q.ExecuteUpdateAsync(s => s.SetProperty(u => u.InDownloadList, inList), ct);
+    }
+
+    public async Task SetContentSelectionAsync(string siteId, long userId, UserContentSelection selection, CancellationToken ct = default)
+    {
+        var valid = siteId switch
+        {
+            PixivSiteProvider.Id => selection is UserContentSelection.All or UserContentSelection.PixivArtworks or UserContentSelection.PixivNovels,
+            DouyinSiteProvider.Id => selection is UserContentSelection.All or UserContentSelection.DouyinVideos or UserContentSelection.DouyinGalleries,
+            _ => selection == UserContentSelection.All,
+        };
+        if (!valid) throw new ArgumentException("此平台不支持该下载内容选择", nameof(selection));
+        await using var db = await siteFactory.CreateAsync(siteId, ct);
+        await db.Users.Where(u => u.SiteId == siteId && u.Id == userId)
+            .ExecuteUpdateAsync(s => s.SetProperty(u => u.ContentSelection, selection), ct);
+    }
+
+    public async Task SetDownloadSinceAsync(string siteId, long userId, DateOnly? since, CancellationToken ct = default)
+    {
+        if (siteId != DouyinSiteProvider.Id)
+            throw new ArgumentException("仅抖音支持作者日期限制", nameof(siteId));
+        await using var db = await siteFactory.CreateAsync(siteId, ct);
+        await db.Users.Where(u => u.SiteId == siteId && u.Id == userId)
+            .ExecuteUpdateAsync(s => s.SetProperty(u => u.DownloadSince, since), ct);
     }
 
     private static async Task<User> UpsertAsync(

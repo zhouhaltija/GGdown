@@ -90,6 +90,30 @@ public class SiteDbSplitMigrationTests : IDisposable
         Assert.Equal(1, await tw.Users.CountAsync());
     }
 
+    [Fact]
+    public async Task Apply_preserves_legacy_pixiv_single_type_choice()
+    {
+        SeedLegacyDb();
+        var options = new DbContextOptionsBuilder<GGdownDbContext>()
+            .UseSqlite($"Data Source={_paths.DbFile};Pooling=False").Options;
+        using (var legacy = new GGdownDbContext(options))
+        {
+            legacy.Settings.Add(new SettingEntry
+            {
+                Key = "site.pixiv.options",
+                Value = """{"download_artworks":true,"download_novels":false}""",
+            });
+            legacy.SaveChanges();
+        }
+
+        await SiteDbSplitMigration.ApplyAsync(_paths);
+
+        var factory = new SiteDbContextFactory(_paths);
+        await using var pixiv = await factory.CreateAsync("pixiv");
+        Assert.Equal(UserContentSelection.PixivArtworks,
+            (await pixiv.Users.SingleAsync()).ContentSelection);
+    }
+
     public void Dispose()
     {
         if (Directory.Exists(_paths.Root)) Directory.Delete(_paths.Root, true);

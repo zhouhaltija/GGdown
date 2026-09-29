@@ -33,6 +33,21 @@ public sealed partial class DownloadsPage : Page
         }
     }
 
+    // 回车即下载：输入框是本页主操作入口，不必再去点按钮
+    private void OnSearchKeyDown(object sender, Microsoft.UI.Xaml.Input.KeyRoutedEventArgs e)
+    {
+        if (e.Key != Windows.System.VirtualKey.Enter) return;
+        e.Handled = true;
+        if (Vm.SearchCommand.CanExecute(null)) Vm.SearchCommand.Execute(null);
+    }
+
+    private void OnPermalinkKeyDown(object sender, Microsoft.UI.Xaml.Input.KeyRoutedEventArgs e)
+    {
+        if (e.Key != Windows.System.VirtualKey.Enter) return;
+        e.Handled = true;
+        if (Vm.DownloadPermalinkCommand.CanExecute(null)) Vm.DownloadPermalinkCommand.Execute(null);
+    }
+
     protected override void OnNavigatedFrom(NavigationEventArgs e)
     {
         base.OnNavigatedFrom(e);

@@ -38,42 +38,36 @@
                  裁定 2：单模板 + x:Bind 函数可见性切换，简洁优先）—— -->
             <TextBlock Text="{x:Bind Vm.OptionsHeader, Mode=OneWay}" FontSize="18" FontWeight="SemiBold" Margin="0,8,0,0"
                        Visibility="{x:Bind conv:UiConv.ToVisibility(Vm.IsSiteAvailable), Mode=OneWay}"/>
-            <Grid Padding="12" CornerRadius="4" Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
-                  BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}" BorderThickness="1"
-                  Visibility="{x:Bind conv:UiConv.ToVisibility(Vm.IsSiteAvailable), Mode=OneWay}">
-                <StackPanel Spacing="8">
-                    <ItemsControl ItemsSource="{x:Bind Vm.SiteOptions, Mode=OneWay}">
-                        <ItemsControl.ItemTemplate>
-                            <DataTemplate x:DataType="vm:OptionItemViewModel">
-                                <Grid Padding="0,4" ColumnSpacing="12">
-                                    <Grid.ColumnDefinitions>
-                                        <ColumnDefinition Width="*"/>
-                                        <ColumnDefinition Width="Auto"/>
-                                    </Grid.ColumnDefinitions>
-                                    <StackPanel Spacing="2">
-                                        <TextBlock Text="{x:Bind DisplayName}"/>
-                                        <TextBlock Text="{x:Bind Key}" FontSize="12" Opacity="0.6"/>
-                                    </StackPanel>
-                                    <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center">
-                                        <ToggleSwitch IsOn="{x:Bind BoolValue, Mode=TwoWay}" OnContent="" OffContent=""
-                                                      MinWidth="0" Margin="0" HorizontalAlignment="Right"
-                                                      Visibility="{x:Bind conv:UiConv.ToVisibility(IsBoolean), Mode=OneWay}"/>
-                                        <TextBox Text="{x:Bind TextValue, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
-                                                 MinWidth="280"
-                                                 Visibility="{x:Bind conv:UiConv.ToVisibility(IsText), Mode=OneWay}"/>
-                                        <ComboBox ItemsSource="{x:Bind Choices}"
-                                                  SelectedItem="{x:Bind TextValue, Mode=TwoWay}"
-                                                  MinWidth="140"
-                                                  Visibility="{x:Bind conv:UiConv.ToVisibility(IsChoice), Mode=OneWay}"/>
-                                    </StackPanel>
-                                </Grid>
-                            </DataTemplate>
-                        </ItemsControl.ItemTemplate>
-                    </ItemsControl>
-                    <Button Content="保存站点选项" Command="{x:Bind Vm.SaveOptionsCommand}"/>
-                </StackPanel>
-            </Grid>
-            <TextBlock Text="{x:Bind Vm.StatusMessage, Mode=OneWay}" Opacity="0.8" Margin="0,4,0,0"/>
+            <!-- 每个选项一张 SettingsCard（与全局设置页同一视觉）；改动自动保存。
+                 gallery-dl 原始键名只放 ToolTip，供排查时对照，不占正文。 -->
+            <TextBlock Text="修改后自动保存，下次下载生效。" Opacity="0.7"
+                       Visibility="{x:Bind conv:UiConv.ToVisibility(Vm.IsSiteAvailable), Mode=OneWay}"/>
+            <ItemsControl ItemsSource="{x:Bind Vm.SiteOptions, Mode=OneWay}"
+                          Visibility="{x:Bind conv:UiConv.ToVisibility(Vm.IsSiteAvailable), Mode=OneWay}">
+                <ItemsControl.ItemsPanel>
+                    <ItemsPanelTemplate>
+                        <StackPanel Spacing="4"/>
+                    </ItemsPanelTemplate>
+                </ItemsControl.ItemsPanel>
+                <ItemsControl.ItemTemplate>
+                    <DataTemplate x:DataType="vm:OptionItemViewModel">
+                        <controls:SettingsCard Header="{x:Bind DisplayName}" ToolTipService.ToolTip="{x:Bind Key}">
+                            <Grid>
+                                <ToggleSwitch IsOn="{x:Bind BoolValue, Mode=TwoWay}" OnContent="开" OffContent="关"
+                                              AutomationProperties.Name="{x:Bind DisplayName}"
+                                              Visibility="{x:Bind conv:UiConv.ToVisibility(IsBoolean), Mode=OneWay}"/>
+                                <TextBox Text="{x:Bind TextValue, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
+                                         MinWidth="280" AutomationProperties.Name="{x:Bind DisplayName}"
+                                         Visibility="{x:Bind conv:UiConv.ToVisibility(IsText), Mode=OneWay}"/>
+                                <ComboBox ItemsSource="{x:Bind Choices}"
+                                          SelectedItem="{x:Bind TextValue, Mode=TwoWay}"
+                                          MinWidth="140" AutomationProperties.Name="{x:Bind DisplayName}"
+                                          Visibility="{x:Bind conv:UiConv.ToVisibility(IsChoice), Mode=OneWay}"/>
+                            </Grid>
+                        </controls:SettingsCard>
+                    </DataTemplate>
+                </ItemsControl.ItemTemplate>
+            </ItemsControl>
         </StackPanel>
     </ScrollViewer>
 </Page>

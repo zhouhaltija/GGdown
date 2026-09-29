@@ -75,6 +75,33 @@ public class ImportViewModelTests : IDisposable
     }
 
     [Fact]
+    public async Task AddUser_douyin_work_url_enqueues_permalink_without_creating_user()
+    {
+        var gate = new TaskCompletionSource();
+        _engine.OnDownload = async (_, _, _, ct) => await gate.Task.WaitAsync(ct);
+        var site = new FakeCurrentSite();
+        await site.SelectAsync("douyin");
+        _db.Accounts.Add(new Account { SiteId = "douyin", CookiePath = "c", Status = AccountStatus.Ok,
+            IsActive = true, AddedAt = DateTime.UtcNow });
+        _db.SaveChanges();
+        var sites = new SiteRegistry([new DouyinSiteProvider()]);
+        var factory = new SingleSiteDbContextFactory(_db);
+        var vm = new ImportViewModel(
+            new AccountService(factory, _engine, _paths, sites, NullLogger<AccountService>.Instance),
+            new UserService(factory, _engine, _paths, sites, NullLogger<UserService>.Instance),
+            new AccountQueryService(factory),
+            new DownloadQueueService(factory, _engine, new FakeStats(), _paths, sites, NullLogger<DownloadQueueService>.Instance),
+            new AppSettings(new SingleGlobalDbContextFactory(_global.Item2), sites, new SiteDbContextFactory(_paths)),
+            new SyncDispatcher(), sites, site);
+        vm.UserInput = "https://www.douyin.com/video/1234567890123456789";
+
+        Assert.True(await vm.AddUserAsync());
+        Assert.Empty(_db.Users);
+        Assert.Equal(TargetKind.Permalink, Assert.Single(_db.Jobs).TargetKind);
+        gate.SetResult();
+    }
+
+    [Fact]
     public async Task AddUser_valid_input_creates_user_and_fires_import_completed()
     {
         var fired = false;

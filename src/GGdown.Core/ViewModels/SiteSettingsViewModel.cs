@@ -1,4 +1,5 @@
 using System.Collections.ObjectModel;
+using System.Globalization;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
 using GGdown.Data;
@@ -15,7 +16,7 @@ namespace GGdown.ViewModels;
 /// 注册为 Transient 且页面 NavigationCacheMode=Enabled（构造函数解析一次，实例与页面同生命周期）——
 /// 依赖 Scoped 的 IAccountService，singleton 会形成 captive dependency（B7 裁定沿用）。
 /// </summary>
-public partial class SiteSettingsViewModel : ObservableObject
+public partial class SiteSettingsViewModel : StatusViewModel
 {
     private readonly ICurrentSite _currentSite;
     private readonly IAppSettings _settings;
@@ -79,9 +80,6 @@ public partial class SiteSettingsViewModel : ObservableObject
     [ObservableProperty]
     private string? _pendingRefreshToken;
 
-    [ObservableProperty]
-    private string? _statusMessage;       // 操作结果反馈
-
     public event Action? AccountChanged;  // 导入/验证后通知（页面刷新账号卡，裁定 8）
 
     // —— 站点选项 ——
@@ -127,11 +125,42 @@ public partial class SiteSettingsViewModel : ObservableObject
     private void RebuildOptions(IReadOnlyDictionary<string, object?> options)
     {
         var schema = _sites.Get(SiteId).OptionsSchema;
+        _autoSave?.Cancel();
         SiteOptions.Clear();
         foreach (var field in schema.Fields)
         {
             options.TryGetValue(field.Key, out var value);
-            SiteOptions.Add(new OptionItemViewModel(field, value ?? field.Default));
+            var item = new OptionItemViewModel(field, value ?? field.Default);
+            item.PropertyChanged += (_, _) => ScheduleAutoSave(); // 改动即保存，与界面设置"勾选即生效"一致
+            SiteOptions.Add(item);
+        }
+    }
+
+    // —— 自动保存：开关立即生效，文本输入 600ms 防抖后保存（不再需要单独的「保存」按钮）——
+
+    private CancellationTokenSource? _autoSave;
+
+    /// <summary>自动保存防抖时长（测试可调小）。</summary>
+    public TimeSpan AutoSaveDelay { get; set; } = TimeSpan.FromMilliseconds(600);
+
+    private void ScheduleAutoSave()
+    {
+        _autoSave?.Cancel();
+        _autoSave?.Dispose();
+        var cts = _autoSave = new CancellationTokenSource();
+        _ = AutoSaveAsync(cts.Token);
+    }
+
+    private async Task AutoSaveAsync(CancellationToken ct)
+    {
+        try
+        {
+            await Task.Delay(AutoSaveDelay, ct);
+            _dispatcher.Post(() => { if (!ct.IsCancellationRequested) _ = SaveOptionsAsync(); });
+        }
+        catch (OperationCanceledException)
+        {
+            // 新改动取代了旧的等待
         }
     }
 
@@ -162,6 +191,17 @@ public partial class SiteSettingsViewModel : ObservableObject
             foreach (var field in schema.Fields)
                 if (byKey.TryGetValue(field.Key, out var item))
                     dict[field.Key] = item.ToValue();
+            if (SiteId == DouyinSiteProvider.Id && dict.TryGetValue("earliest_date", out var dateValue)
+                && dateValue is string dateText && !string.IsNullOrWhiteSpace(dateText))
+            {
+                if (!DateOnly.TryParseExact(dateText.Trim(), "yyyy-MM-dd", CultureInfo.InvariantCulture,
+                        DateTimeStyles.None, out _))
+                {
+                    StatusMessage = "最早发布日期须为 yyyy-MM-dd";
+                    return;
+                }
+                dict["earliest_date"] = dateText.Trim();
+            }
             await _settings.SetSiteOptionsAsync(SiteId, dict);
             StatusMessage = "站点选项已保存";
         }

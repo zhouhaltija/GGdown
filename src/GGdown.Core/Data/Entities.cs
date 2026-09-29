@@ -2,6 +2,7 @@ namespace GGdown.Data;
 
 public enum AccountStatus { Unverified, Ok, Invalid }
 public enum UserSource { Following, Manual, Link }
+public enum UserContentSelection { All, PixivArtworks, PixivNovels, DouyinVideos, DouyinGalleries }
 public enum TargetKind
 {
     UserMedia, AccountLikes, AccountBookmarks, UserNovels, AccountNovelBookmarks,
@@ -43,6 +44,8 @@ public sealed class User
     public bool IsPinned { get; set; }
     public bool IsSkipped { get; set; }
     public bool InDownloadList { get; set; }
+    public UserContentSelection ContentSelection { get; set; }
+    public DateOnly? DownloadSince { get; set; }
     public long DownloadCount { get; set; }
     public DateTime? LastDownloadAt { get; set; }
     public DateTime AddedAt { get; set; }

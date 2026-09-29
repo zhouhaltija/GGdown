@@ -1,4 +1,3 @@
-using System.Collections.Concurrent;
 using GGdown.Data;
 using GGdown.Engine;
 using GGdown.Paths;
@@ -48,12 +47,13 @@ public sealed class DownloadQueueService(
         long JobId, long AccountId, string SiteId, TargetKind Kind, long? UserId,
         string TargetScreenName, string? TargetRestId, string Title, string BaseDirectory,
         IReadOnlyDictionary<string, object?> SiteOptions, string CookieAbsolutePath,
-        string ArchiveFile, string? DirectUrl = null);
+        string ArchiveFile, string? DirectUrl = null,
+        UserContentSelection ContentSelection = UserContentSelection.All, DateOnly? DownloadSince = null);
 
     private readonly object _gate = new();
     private readonly Dictionary<long, JobSnapshot> _active = [];
     private readonly Dictionary<long, CancellationTokenSource> _cancels = [];
-    private readonly ConcurrentQueue<WorkItem> _pending = [];
+    private readonly LinkedList<WorkItem> _pending = [];
     private int _runningWorkers;
     private int _concurrency = 1;
 
@@ -96,9 +96,10 @@ public sealed class DownloadQueueService(
                 ContentKind.UserHighlights => $"{name}（高光）",
                 _ => name,
             };
+            lock (_gate) _pending.AddLast(new WorkItem(job.Id, account.Id, account.SiteId, targetKind,
+                user.Id, user.ScreenName, user.RestId, title, baseDirectory, siteOptions, cookieAbs, archive,
+                ContentSelection: user.ContentSelection, DownloadSince: user.DownloadSince));
             AddActive(job.Id, account.SiteId, targetKind, title, JobStatus.Pending, user.Id);
-            _pending.Enqueue(new WorkItem(job.Id, account.Id, account.SiteId, targetKind,
-                user.Id, user.ScreenName, user.RestId, title, baseDirectory, siteOptions, cookieAbs, archive));
         }
         EnsureWorkers();
         return first;
@@ -124,9 +125,9 @@ public sealed class DownloadQueueService(
         await db.SaveChangesAsync(ct);
         var kindLabel = sites.Get(account.SiteId).KindLabel(kind);
         var title = $"{kindLabel}（@{account.ScreenName}）";
-        AddActive(job.Id, account.SiteId, targetKind, title, JobStatus.Pending);
-        _pending.Enqueue(new WorkItem(job.Id, account.Id, account.SiteId, targetKind,
+        lock (_gate) _pending.AddLast(new WorkItem(job.Id, account.Id, account.SiteId, targetKind,
             null, account.ScreenName ?? "me", account.RestId, title, baseDirectory, siteOptions, cookieAbs, archive));
+        AddActive(job.Id, account.SiteId, targetKind, title, JobStatus.Pending);
         EnsureWorkers();
         return job.Id;
     }
@@ -148,17 +149,56 @@ public sealed class DownloadQueueService(
         };
         db.Jobs.Add(job);
         await db.SaveChangesAsync(ct);
-        AddActive(job.Id, account.SiteId, targetKind, title, JobStatus.Pending);
-        _pending.Enqueue(new WorkItem(job.Id, account.Id, account.SiteId, targetKind,
+        lock (_gate) _pending.AddLast(new WorkItem(job.Id, account.Id, account.SiteId, targetKind,
             null, account.ScreenName ?? "me", account.RestId, title, baseDirectory, siteOptions, cookieAbs, archive, url));
+        AddActive(job.Id, account.SiteId, targetKind, title, JobStatus.Pending);
         EnsureWorkers();
         return job.Id;
     }
 
-    public Task CancelAsync(long jobId, CancellationToken ct = default)
+    public async Task CancelAsync(long jobId, CancellationToken ct = default)
     {
-        lock (_gate) { if (_cancels.TryGetValue(jobId, out var cts)) cts.Cancel(); }
-        return Task.CompletedTask;
+        WorkItem? pending = null;
+        lock (_gate)
+        {
+            if (_cancels.TryGetValue(jobId, out var cts))
+            {
+                cts.Cancel();
+                return;
+            }
+            if (!_active.TryGetValue(jobId, out var snapshot) || snapshot.Status != JobStatus.Pending)
+                return;
+            for (var node = _pending.First; node is not null; node = node.Next)
+            {
+                if (node.Value.JobId != jobId) continue;
+                pending = node.Value;
+                _pending.Remove(node);
+                break;
+            }
+        }
+        if (pending is null) return;
+        try
+        {
+            await using var db = await siteFactory.CreateAsync(pending.SiteId, ct);
+            await db.Jobs.Where(j => j.Id == jobId && j.Status == JobStatus.Pending)
+                .ExecuteUpdateAsync(s => s.SetProperty(j => j.Status, JobStatus.Canceled)
+                    .SetProperty(j => j.FinishedAt, DateTime.UtcNow), ct);
+        }
+        catch
+        {
+            lock (_gate) _pending.AddFirst(pending);
+            EnsureWorkers();
+            throw;
+        }
+
+        JobSnapshot canceled;
+        lock (_gate)
+        {
+            canceled = _active[jobId] with { Status = JobStatus.Canceled };
+            _active.Remove(jobId);
+        }
+        JobChanged?.Invoke(canceled);
+        JobRemoved?.Invoke(canceled);
     }
 
     public async Task RecoverOnStartupAsync(CancellationToken ct = default)
@@ -178,7 +218,7 @@ public sealed class DownloadQueueService(
     {
         lock (_gate)
         {
-            while (_runningWorkers < _concurrency && !_pending.IsEmpty)
+            while (_runningWorkers < _concurrency && _pending.Count > 0)
             {
                 _runningWorkers++;
                 _ = Task.Run(RunWorkerLoopAsync);
@@ -193,26 +233,33 @@ public sealed class DownloadQueueService(
             while (true)
             {
                 WorkItem item;
+                CancellationTokenSource cts;
                 lock (_gate)
                 {
-                    if (!_pending.TryDequeue(out item!)) break;
+                    if (_pending.First is not { } first) break;
+                    item = first.Value;
+                    _pending.RemoveFirst();
+                    cts = new CancellationTokenSource();
+                    _cancels[item.JobId] = cts;
                 }
-                try { await RunJobAsync(item); }
+                try { await RunJobAsync(item, cts); }
                 catch (Exception ex) { log.LogError(ex, "任务 {JobId} 工作循环异常", item.JobId); }
+                finally
+                {
+                    lock (_gate) _cancels.Remove(item.JobId);
+                    cts.Dispose();
+                }
             }
         }
         finally
         {
             lock (_gate) _runningWorkers--;
-            if (!_pending.IsEmpty) EnsureWorkers();
+            EnsureWorkers();
         }
     }
 
-    private async Task RunJobAsync(WorkItem item)
+    private async Task RunJobAsync(WorkItem item, CancellationTokenSource cts)
     {
-        var cts = new CancellationTokenSource();
-        lock (_gate) _cancels[item.JobId] = cts;
-
         await using (var db = await siteFactory.CreateAsync(item.SiteId))
         {
             var job = await db.Jobs.SingleAsync(j => j.Id == item.JobId);
@@ -237,8 +284,10 @@ public sealed class DownloadQueueService(
 
         try
         {
+            cts.Token.ThrowIfCancellationRequested();
             var provider = sites.Get(item.SiteId);
-            var target = new UserTarget(item.UserId, item.TargetScreenName, item.BaseDirectory, item.TargetRestId, item.DirectUrl);
+            var target = new UserTarget(item.UserId, item.TargetScreenName, item.BaseDirectory, item.TargetRestId,
+                item.DirectUrl, item.ContentSelection, item.DownloadSince);
             var plan = provider.BuildDownload((ContentKind)item.Kind, target, item.SiteOptions,
                 new DownloadPaths(item.CookieAbsolutePath, item.ArchiveFile));
 
@@ -311,10 +360,6 @@ public sealed class DownloadQueueService(
             await FinishJobAsync(item, JobStatus.Failed, e.Message, hasFinal,
                 totalFinal, skippedFinal, failedFinal, done, skipped, failed);
             throw; // 交 RunWorkerLoopAsync 记日志
-        }
-        finally
-        {
-            lock (_gate) _cancels.Remove(item.JobId, out _);
         }
     }
 

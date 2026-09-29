@@ -5,6 +5,7 @@ import http.cookiejar
 import os
 import re
 import sys
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from types import SimpleNamespace
 from urllib.parse import urlsplit
@@ -213,12 +214,20 @@ class DouyinClient:
             raise ValueError("未取得抖音用户资料")
         return map_user(raw)
 
-    async def posts(self, identifier: str) -> list[dict]:
+    async def posts(self, identifier: str, earliest_date: str = "") -> list[dict]:
         from src.interface.account import Account
 
-        raw = await Account(
-            self.params, cookie=self.cookies, sec_user_id=identifier, tab="post"
-        ).run(single_page=True)
+        # 第三方库仅接受 yyyy/MM/dd，且按运行机器的本地时区判断翻页截止日期。
+        # 提前一天停止，随后由下载流程按北京时间精确过滤边界日期。
+        earliest_for_pages = ""
+        if earliest_date:
+            since = date.fromisoformat(earliest_date)
+            page_since = since - timedelta(days=1) if since > date.min else since
+            earliest_for_pages = f"{page_since.year:04d}/{page_since.month:02d}/{page_since.day:02d}"
+        raw, _, _ = await Account(
+            self.params, cookie=self.cookies, sec_user_id=identifier,
+            tab="post", earliest=earliest_for_pages,
+        ).run()
         if not isinstance(raw, list):
             raise ValueError("未取得抖音发布作品")
         if not raw:
@@ -298,13 +307,19 @@ async def _download_with_client(spec: dict, client, emit_event) -> None:
     if archive_path and archive_path.exists():
         archived = set(archive_path.read_text(encoding="utf-8").splitlines())
     quality = site_options.get("original_quality") is True
+    media_filter = site_options.get("media_filter") or "all"
+    if media_filter not in {"all", "videos", "galleries"}:
+        raise ValueError("无效的抖音作品类型")
+    earliest_date = site_options.get("earliest_date") or ""
+    since = date.fromisoformat(earliest_date) if earliest_date else None
+    china_time = timezone(timedelta(hours=8))
     done = skipped = failed = 0
 
     for input_url in spec.get("urls") or []:
         kind, identifier = await client.resolve(input_url)
         if kind == "user":
             canonical = f"https://www.douyin.com/user/{identifier}"
-            raw_items = await client.posts(identifier)
+            raw_items = await client.posts(identifier, earliest_date)
             output_dir = Path(base_directory) / "douyin" / identifier
         elif kind == "work":
             canonical = f"https://www.douyin.com/video/{identifier}"
@@ -318,7 +333,16 @@ async def _download_with_client(spec: dict, client, emit_event) -> None:
         output_dir.mkdir(parents=True, exist_ok=True)
 
         for raw in raw_items:
+            if since is not None:
+                created = raw.get("create_time")
+                if created is None or datetime.fromtimestamp(int(created), china_time).date() < since:
+                    continue
             normalized = await client.extract_media(raw, quality)
+            downloads = normalized.get("downloads")
+            if media_filter == "videos" and not isinstance(downloads, str):
+                continue
+            if media_filter == "galleries" and not isinstance(downloads, list):
+                continue
             for media in media_files(normalized):
                 item_id = media["item_id"]
                 file_key = f"{item_id}:{media['index']}"

@@ -76,4 +76,24 @@ public class DouyinSiteProviderTests
             SiteUiProfiles.For("douyin"));
         Assert.Equal([ContentKind.UserMedia, ContentKind.Permalink], _site.SupportedKinds);
     }
+
+    [Fact]
+    public void User_plan_applies_content_selection_and_user_date_over_site_date()
+    {
+        var options = new Dictionary<string, object?> { ["earliest_date"] = "2024-01-01" };
+        var paths = new DownloadPaths("cookies.txt", "archive.txt");
+        var user = _site.BuildDownload(ContentKind.UserMedia,
+            new UserTarget(1, "creator", "D:/downloads", "MS4wLjABtest",
+                ContentSelection: GGdown.Data.UserContentSelection.DouyinGalleries,
+                DownloadSince: new DateOnly(2025, 2, 3)), options, paths);
+        var siteOnly = _site.BuildDownload(ContentKind.UserMedia,
+            new UserTarget(2, "creator", "D:/downloads", "MS4wLjABtest"), options, paths);
+
+        var userOptions = (IReadOnlyDictionary<string, object?>)user.Options["douyin"]!;
+        var siteOnlyOptions = (IReadOnlyDictionary<string, object?>)siteOnly.Options["douyin"]!;
+        Assert.Equal("galleries", userOptions["media_filter"]);
+        Assert.Equal("2025-02-03", userOptions["earliest_date"]);
+        Assert.Equal("all", siteOnlyOptions["media_filter"]);
+        Assert.Equal("2024-01-01", siteOnlyOptions["earliest_date"]);
+    }
 }

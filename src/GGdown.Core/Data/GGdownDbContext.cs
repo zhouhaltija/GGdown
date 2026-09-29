@@ -20,6 +20,9 @@ public sealed class GGdownDbContext(DbContextOptions<GGdownDbContext> options) :
         });
         b.Entity<User>(e =>
         {
+            // 旧合库只用于搬迁；新偏好字段仅存在于平台库。
+            e.Ignore(u => u.ContentSelection);
+            e.Ignore(u => u.DownloadSince);
             e.HasIndex(u => new { u.SiteId, u.RestId }).IsUnique();
             e.HasIndex(u => u.ScreenName);
             e.HasIndex(u => u.LastDownloadAt);

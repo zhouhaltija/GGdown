@@ -10,7 +10,6 @@
             <controls:SettingsCard Header="下载引擎" Description="{x:Bind Vm.EngineVersion, Mode=OneWay}">
                 <Button Content="打开日志文件夹" Command="{x:Bind Vm.OpenLogsCommand}"/>
             </controls:SettingsCard>
-            <TextBlock Text="{x:Bind Vm.StatusMessage, Mode=OneWay}" Opacity="0.8" Margin="0,4,0,0"/>
         </StackPanel>
     </ScrollViewer>
 </Page>

@@ -119,6 +119,85 @@ public class UserServiceTests : IDisposable
     }
 
     [Fact]
+    public async Task Content_selection_is_saved_per_user_and_survives_profile_refresh()
+    {
+        var account = new Account
+        { SiteId = "pixiv", CookiePath = "pixiv\\c\\cookies.txt", Status = AccountStatus.Ok,
+            IsActive = true, AddedAt = DateTime.UtcNow };
+        _t.Item2.Accounts.Add(account);
+        await _t.Item2.SaveChangesAsync();
+        var service = new UserService(new SingleSiteDbContextFactory(_t.Item2), _engine, _paths,
+            new SiteRegistry([new PixivSiteProvider()]), NullLogger<UserService>.Instance);
+        _engine.NextUserInfo = new SiteUserInfo("12345", "12345", "First", null);
+        var first = await service.AddUserAsync(account, "12345");
+        _engine.NextUserInfo = new SiteUserInfo("67890", "67890", "Second", null);
+        var second = await service.AddUserAsync(account, "67890");
+
+        await service.SetContentSelectionAsync("pixiv", first.Id, UserContentSelection.PixivNovels);
+        _engine.NextUserInfo = new SiteUserInfo("12345", "12345", "First Renamed", null);
+        await service.AddUserAsync(account, "12345");
+
+        Assert.Equal(UserContentSelection.PixivNovels,
+            _t.Item2.Users.AsNoTracking().Single(u => u.Id == first.Id).ContentSelection);
+        Assert.Equal(UserContentSelection.All,
+            _t.Item2.Users.AsNoTracking().Single(u => u.Id == second.Id).ContentSelection);
+    }
+
+    [Fact]
+    public async Task Douyin_user_date_can_override_and_clear_site_default()
+    {
+        var account = new Account
+        { SiteId = "douyin", CookiePath = "douyin\\c\\cookies.txt", Status = AccountStatus.Ok,
+            IsActive = true, AddedAt = DateTime.UtcNow };
+        _t.Item2.Accounts.Add(account);
+        await _t.Item2.SaveChangesAsync();
+        _engine.NextUserInfo = new SiteUserInfo("MS4wLjABtest", "creator", "Creator", null);
+        var service = new UserService(new SingleSiteDbContextFactory(_t.Item2), _engine, _paths,
+            new SiteRegistry([new DouyinSiteProvider()]), NullLogger<UserService>.Instance);
+        var user = await service.AddUserAsync(account, "https://www.douyin.com/user/MS4wLjABtest");
+
+        await service.SetDownloadSinceAsync("douyin", user.Id, new DateOnly(2025, 2, 3));
+        Assert.Equal(new DateOnly(2025, 2, 3),
+            _t.Item2.Users.AsNoTracking().Single(u => u.Id == user.Id).DownloadSince);
+        await service.SetDownloadSinceAsync("douyin", user.Id, null);
+        Assert.Null(_t.Item2.Users.AsNoTracking().Single(u => u.Id == user.Id).DownloadSince);
+    }
+
+    [Fact]
+    public async Task AddUser_accepts_douyin_profile_share_short_link()
+    {
+        var account = new Account
+        { SiteId = "douyin", CookiePath = "douyin\\c\\cookies.txt", Status = AccountStatus.Ok,
+            IsActive = true, AddedAt = DateTime.UtcNow };
+        _t.Item2.Accounts.Add(account);
+        await _t.Item2.SaveChangesAsync();
+        _engine.NextUserInfo = new SiteUserInfo("MS4wLjABtest", "creator_name", "Creator", null);
+        var service = new UserService(new SingleSiteDbContextFactory(_t.Item2), _engine, _paths,
+            new SiteRegistry([new DouyinSiteProvider()]), NullLogger<UserService>.Instance);
+        var input = "长按复制此条消息，打开抖音搜索，查看TA的更多作品。 https://v.douyin.com/F2tY_NKbYjQ/\u00A0";
+
+        var user = await service.AddUserAsync(account, input);
+
+        Assert.Equal("MS4wLjABtest", user.RestId);
+        Assert.Equal("creator_name", user.ScreenName);
+        Assert.Equal(UserSource.Link, user.Source);
+        Assert.Equal("https://www.douyin.com/user/MS4wLjABtest", user.ProfileUrl);
+    }
+
+    [Fact]
+    public async Task AddUser_rejects_douyin_work_link()
+    {
+        var account = new Account
+        { SiteId = "douyin", CookiePath = "douyin\\c\\cookies.txt", Status = AccountStatus.Ok,
+            IsActive = true, AddedAt = DateTime.UtcNow };
+        var service = new UserService(new SingleSiteDbContextFactory(_t.Item2), _engine, _paths,
+            new SiteRegistry([new DouyinSiteProvider()]), NullLogger<UserService>.Instance);
+
+        await Assert.ThrowsAsync<ArgumentException>(() => service.AddUserAsync(
+            account, "https://www.douyin.com/video/1234567890123456789"));
+    }
+
+    [Fact]
     public async Task Douyin_refresh_uses_rest_id_profile_url()
     {
         var account = new Account

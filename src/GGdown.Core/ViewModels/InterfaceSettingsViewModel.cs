@@ -10,12 +10,10 @@ namespace GGdown.ViewModels;
 /// 规则（spec §2.3）：Available=false 的站点不可勾选（开关禁用，仅作预告展示），
 /// 勾选即时生效（保存 → MainNavViewModel.ReloadVisibleAsync 刷新平台栏）。
 /// </summary>
-public partial class InterfaceSettingsViewModel(IAppSettings settings, MainNavViewModel nav) : ObservableObject
+public partial class InterfaceSettingsViewModel(IAppSettings settings, MainNavViewModel nav) : StatusViewModel
 {
     public ObservableCollection<VisibleSiteItemViewModel> Items { get; } = [];
 
-    [ObservableProperty]
-    private string? _statusMessage;
 
     public async Task StartAsync()
     {

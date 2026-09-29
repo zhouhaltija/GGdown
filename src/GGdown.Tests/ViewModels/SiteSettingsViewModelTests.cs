@@ -92,6 +92,25 @@ public class SiteSettingsViewModelTests : IDisposable
         Assert.IsType<string>(saved["sleep"]);
     }
 
+    // 改动即自动保存（防抖后），无需点「保存」
+    [Fact]
+    public async Task Changing_option_auto_saves_after_debounce()
+    {
+        _vm.AutoSaveDelay = TimeSpan.FromMilliseconds(20);
+        await _vm.StartAsync();
+        _vm.SiteOptions.Single(o => o.Key == "videos").BoolValue = false;
+
+        var deadline = Environment.TickCount + 5000;
+        IReadOnlyDictionary<string, object?> saved;
+        do
+        {
+            await Task.Delay(20);
+            saved = await _settings.GetSiteOptionsAsync("twitter");
+        } while (!(saved.TryGetValue("videos", out var v) && v is false) && Environment.TickCount < deadline);
+
+        Assert.Equal(false, saved["videos"]);
+    }
+
     // ---- ④/⑧ 账号卡：加载/徽标/重新验证（FakeEngine.WhoAmIError 驱动）/导入 ----
 
     [Fact]

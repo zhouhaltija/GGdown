@@ -95,7 +95,7 @@ public sealed partial class HistoryRowViewModel : ObservableObject
 /// 筛选任一变更自动触发 Refresh（AllowConcurrentExecutions + 刷新代数守卫，UsersViewModel 先例）；
 /// 就绪门（App.Readiness）由页面 OnNavigatedTo await，VM 内不用（控制器裁定 3）。
 /// </summary>
-public partial class HistoryViewModel : ObservableObject
+public partial class HistoryViewModel : StatusViewModel
 {
     private readonly ICurrentSite _currentSite;
     private readonly IHistoryQueryService _history;
@@ -147,8 +147,6 @@ public partial class HistoryViewModel : ObservableObject
     [ObservableProperty]
     private DateTimeOffset? _toDate;     // 含当日：HistoryFilter.To = Date.AddDays(1) 开区间上界
 
-    [ObservableProperty]
-    private string? _statusMessage;      // 操作结果反馈（成功/失败一行话）
 
     public IAsyncRelayCommand RefreshCommand { get; }
     // brief 原文声明非泛型 IAsyncRelayCommand，但其注释"参数：HistoryRowViewModel（行内按钮）"要求携带行——

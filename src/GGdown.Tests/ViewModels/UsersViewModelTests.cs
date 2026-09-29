@@ -94,6 +94,20 @@ public class UsersViewModelTests : IDisposable
     }
 
     [Fact]
+    public async Task DownloadNeverDownloaded_includes_users_hidden_by_search()
+    {
+        await _vm.RefreshCommand.ExecuteAsync(null);
+        _vm.SearchText = "alice";
+        await Task.Delay(450);
+        Assert.Single(_vm.Users);
+
+        await _vm.DownloadNeverDownloadedCommand.ExecuteAsync(null);
+
+        Assert.Contains(_db.Jobs, j => j.UserId == _db.Users.Single(u => u.ScreenName == "bob").Id);
+        Assert.DoesNotContain(_db.Jobs, j => j.UserId == _db.Users.Single(u => u.ScreenName == "alice").Id);
+    }
+
+    [Fact]
     public async Task DownloadSelected_clears_selection_after_enqueue()
     {
         await _vm.RefreshCommand.ExecuteAsync(null);
@@ -192,11 +206,12 @@ public class UsersViewModelTests : IDisposable
         var alice = _vm.Users.Single(r => r.Model.ScreenName == "alice");
         Assert.True(alice.IsSkipped);
         Assert.False(alice.CanDownload);
-        Assert.Contains("已暂停", alice.Subtitle);
+        Assert.Contains("已跳过", alice.Subtitle);
+        Assert.True(alice.RowOpacity < 1.0);
 
         _vm.SelectAll(true);
         await _vm.DownloadSelectedCommand.ExecuteAsync(null);
-        Assert.Contains("暂停 1 个", _vm.StatusMessage);
+        Assert.Contains("略过 1 个已跳过", _vm.StatusMessage);
         Assert.Single(_db.Jobs);
         Assert.Equal(_db.Users.Single(u => u.ScreenName == "bob").Id, _db.Jobs.Single().UserId);
     }
@@ -251,7 +266,7 @@ public class UsersViewModelTests : IDisposable
         var bobId = _vm.Users.Single(r => r.Model.ScreenName == "bob").Model.Id;
         _vm.SelectAll(true);
         await _vm.DownloadSelectedCommand.ExecuteAsync(null);
-        Assert.Contains("跳过 1 个下载中", _vm.StatusMessage);
+        Assert.Contains("略过 1 个下载中", _vm.StatusMessage);
         Assert.Equal(aliceJobs, _db.Jobs.Count(j => j.UserId == alice.Model.Id));
         Assert.Equal(1, _db.Jobs.Count(j => j.UserId == bobId));
         Assert.Equal(0, _vm.SelectedCount);
@@ -281,7 +296,7 @@ public class UsersViewModelTests : IDisposable
         _db.SaveChanges();
         await _vm.RefreshCommand.ExecuteAsync(null);
         await _vm.Users.Single(r => r.Model.ScreenName == "alice").DownloadCommand.ExecuteAsync(null);
-        Assert.Contains("已暂停下载", _vm.StatusMessage);
+        Assert.Contains("已设为跳过", _vm.StatusMessage);
         Assert.Empty(_db.Jobs);
     }
 
@@ -293,14 +308,40 @@ public class UsersViewModelTests : IDisposable
         _vm.Users[0].IsSelected = true;
         await _vm.SkipSelectedCommand.ExecuteAsync(null);
         Assert.True(_db.Users.AsNoTracking().Single(u => u.Id == id).IsSkipped);
-        Assert.Contains("已暂停", _vm.StatusMessage);
-        Assert.Equal("恢复", _vm.Users.Single(r => r.Model.Id == id).SkipButtonText);
+        Assert.Contains("已跳过", _vm.StatusMessage);
+        Assert.Equal("取消跳过", _vm.Users.Single(r => r.Model.Id == id).SkipButtonText);
 
         _vm.Users.Single(r => r.Model.Id == id).IsSelected = true;
         await _vm.UnskipSelectedCommand.ExecuteAsync(null);
         Assert.False(_db.Users.AsNoTracking().Single(u => u.Id == id).IsSkipped);
-        Assert.Contains("已恢复", _vm.StatusMessage);
-        Assert.Equal("暂停", _vm.Users.Single(r => r.Model.Id == id).SkipButtonText);
+        Assert.Contains("已取消跳过", _vm.StatusMessage);
+        Assert.Equal("跳过", _vm.Users.Single(r => r.Model.Id == id).SkipButtonText);
+    }
+
+    [Fact]
+    public async Task DeleteSelected_respects_confirmation()
+    {
+        await _vm.RefreshCommand.ExecuteAsync(null);
+        var before = _vm.Users.Count;
+        int? asked = null;
+        _vm.ConfirmDeleteAsync = n => { asked = n; return Task.FromResult(false); };
+        _vm.Users[0].IsSelected = true;
+        await _vm.DeleteSelectedCommand.ExecuteAsync(null);
+        Assert.Equal(1, asked);
+        Assert.Equal(before, _db.Users.Count());
+
+        _vm.ConfirmDeleteAsync = _ => Task.FromResult(true);
+        await _vm.DeleteSelectedCommand.ExecuteAsync(null);
+        Assert.Equal(before - 1, _db.Users.Count());
+    }
+
+    [Fact]
+    public async Task RefreshProfilesText_reflects_selection_scope()
+    {
+        await _vm.RefreshCommand.ExecuteAsync(null);
+        Assert.Equal("刷新全部资料", _vm.RefreshProfilesText);
+        _vm.Users[0].IsSelected = true;
+        Assert.Equal("刷新选中资料", _vm.RefreshProfilesText);
     }
 
     [Fact]
@@ -339,7 +380,7 @@ public class UsersViewModelTests : IDisposable
     }
 
     [Fact]
-    public async Task Download_pixiv_both_toggles_off_prompts()
+    public async Task Download_pixiv_uses_user_selection_instead_of_legacy_site_toggles()
     {
         var site = new FakeCurrentSite();
         await site.SelectAsync("pixiv");
@@ -353,6 +394,7 @@ public class UsersViewModelTests : IDisposable
         var user = new User
         {
             SiteId = "pixiv", RestId = "9", ScreenName = "z",
+            ContentSelection = UserContentSelection.PixivNovels,
             Source = UserSource.Manual, AddedAt = DateTime.UtcNow, UpdatedAt = DateTime.UtcNow,
         };
         _db.Accounts.Add(account);
@@ -372,8 +414,9 @@ public class UsersViewModelTests : IDisposable
         vm.Users.CollectionChanged += (_, _) => { };
         await vm.RefreshCommand.ExecuteAsync(null);
         await vm.Users.Single().DownloadCommand.ExecuteAsync(null);
-        Assert.Contains("至少启用一种作品类型", vm.StatusMessage);
-        Assert.Empty(_db.Jobs.Where(j => j.AccountId == account.Id));
+        await WaitJobs(1, account.Id);
+        Assert.Single(_db.Jobs.Where(j => j.AccountId == account.Id && j.TargetKind == TargetKind.UserNovels));
+        Assert.Empty(_db.Jobs.Where(j => j.AccountId == account.Id && j.TargetKind == TargetKind.UserMedia));
     }
 
     [Fact]

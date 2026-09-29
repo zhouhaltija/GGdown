@@ -175,6 +175,19 @@ public static class SiteDbSplitMigration
             });
         }
         await db.SaveChangesAsync(ct);
+
+        // 拆库时站点库已迁移到新结构，旧站点选项此时才写入；同步转换为作者级偏好。
+        if (siteId.Equals("pixiv", StringComparison.OrdinalIgnoreCase))
+        {
+            var artworksDisabled = dict.TryGetValue("download_artworks", out var artworks) && Unwrap(artworks) is false;
+            var novelsDisabled = dict.TryGetValue("download_novels", out var novels) && Unwrap(novels) is false;
+            if (artworksDisabled != novelsDisabled)
+            {
+                var selection = artworksDisabled ? UserContentSelection.PixivNovels : UserContentSelection.PixivArtworks;
+                await db.Users.Where(u => u.SiteId == siteId)
+                    .ExecuteUpdateAsync(s => s.SetProperty(u => u.ContentSelection, selection), ct);
+            }
+        }
     }
 
     private static object? Unwrap(object? value) => value switch

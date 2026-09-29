@@ -18,7 +18,7 @@ public partial class MainNavViewModel(ICurrentSite current, IAppSettings setting
         [SitePageKey.Users] = "用户管理",
         [SitePageKey.Downloads] = "下载",
         [SitePageKey.History] = "历史",
-        [SitePageKey.SiteSettings] = "设置",
+        [SitePageKey.SiteSettings] = "账号与选项", // 避免与栏底「设置」（全局）同名
     };
 
     private static readonly (GlobalSettingsPageKey Key, string Title)[] GlobalTabs =
@@ -111,6 +111,34 @@ public partial class MainNavViewModel(ICurrentSite current, IAppSettings setting
         if (IsGlobalSettings) return; // 全局设置区的标签由 Task 9 的 GlobalSettingsPageKey 承载
         await settings.SetSiteLastPageAsync(current.SiteId, key.ToString().ToLowerInvariant());
         TabNavigationRequested?.Invoke(key);
+    }
+
+    /// <summary>
+    /// 启动恢复：选中上次停留的平台（须仍可见），否则不选。返回选中的站点 Id。
+    /// 由 MainWindow 在侧栏载入后调用，页面加载仍各自等待 App.Readiness。
+    /// </summary>
+    public async Task<string?> RestoreLastPlatformAsync()
+    {
+        if (_selectedSiteId is not null || IsGlobalSettings || IsGlobalDownloads) return _selectedSiteId;
+        var last = await settings.GetCurrentSiteIdAsync();
+        var target = Platforms.FirstOrDefault(p => string.Equals(p.SiteId, last, StringComparison.OrdinalIgnoreCase))
+            ?? Platforms.FirstOrDefault();
+        if (target is null) return null;
+        await SelectPlatformAsync(target.SiteId);
+        return target.SiteId;
+    }
+
+    /// <summary>
+    /// 栏底「全部下载」：独立的全局视图——取消平台高亮、清空页组标签，
+    /// 避免"侧栏高亮某平台、内容却是全平台任务"的错位。
+    /// </summary>
+    public void EnterGlobalDownloads()
+    {
+        IsGlobalSettings = false;
+        _selectedSiteId = null;
+        foreach (var p in Platforms) p.IsSelected = false;
+        CurrentTabs.Clear();
+        IsGlobalDownloads = true;
     }
 
     public Task EnterGlobalSettingsAsync()

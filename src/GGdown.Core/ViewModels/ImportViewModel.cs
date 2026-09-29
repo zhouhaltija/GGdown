@@ -89,7 +89,9 @@ public partial class ImportViewModel : ObservableObject
         {
             IsBusy = true;
             var parsed = _sites.Get(SiteId).ParseInput(UserInput!.Trim());
-            if (parsed.Kind is PasteKind.Tweet or PasteKind.List or PasteKind.Search)
+            var isDouyinWork = SiteId == DouyinSiteProvider.Id && parsed.Kind == PasteKind.Work
+                && parsed.DirectUrl?.StartsWith("https://v.douyin.com/", StringComparison.Ordinal) != true;
+            if (parsed.Kind is PasteKind.Tweet or PasteKind.List or PasteKind.Search || isDouyinWork)
             {
                 var dir = await _settings.GetDownloadDirectoryAsync(ct);
                 var siteOptions = await _settings.GetSiteOptionsAsync(SiteId, ct);
@@ -98,6 +100,7 @@ public partial class ImportViewModel : ObservableObject
                 {
                     PasteKind.Tweet => $"推文 {parsed.RestId}",
                     PasteKind.List => $"列表 {parsed.RestId}",
+                    PasteKind.Work => $"抖音作品 {parsed.RestId}",
                     _ => "搜索",
                 };
                 await _queue.EnqueuePermalinkAsync(account, parsed.DirectUrl!, title, kind, dir, siteOptions, ct);

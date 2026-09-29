@@ -1,5 +1,6 @@
 import sys
 import asyncio
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import pytest
@@ -189,6 +190,73 @@ def test_media_files_maps_video_and_gallery():
     assert [part["suffix"] for part in media_files(gallery)] == ["jpg", "jpg"]
 
 
+def test_posts_fetches_all_pages_with_earliest_date(monkeypatch):
+    from src.interface import account as account_module
+
+    calls = []
+
+    class FakeAccount:
+        def __init__(self, params, **kwargs):
+            calls.append(kwargs)
+
+        async def run(self, **kwargs):
+            calls.append(kwargs)
+            return ([{"aweme_id": "1"}, {"aweme_id": "2"}], None, None)
+
+    monkeypatch.setattr(account_module, "Account", FakeAccount)
+    client = object.__new__(DouyinClient)
+    client.params = object()
+    client.cookies = "fictional"
+
+    result = asyncio.run(client.posts("MS4wLjABtest", "2025-01-01"))
+
+    assert len(result) == 2
+    # 第三方库只解析 yyyy/MM/dd；提前一天停止，避免其本机时区日期漏掉北京时间边界作品。
+    assert calls[0]["earliest"] == "2024/12/31"
+    assert calls[1] == {}  # 不传 single_page=True，让第三方库抓取后续页面
+
+
+@pytest.mark.parametrize("media_filter,expected", [
+    ("videos", {"1000000000000000001_1.mp4"}),
+    ("galleries", {"1000000000000000002_1.jpg"}),
+])
+def test_user_download_filters_type_and_date(tmp_path, media_filter, expected):
+    china_time = timezone(timedelta(hours=8))
+
+    class Client:
+        earliest = None
+
+        async def resolve(self, value):
+            return parse_target(value)
+
+        async def posts(self, identifier, earliest_date=""):
+            self.earliest = earliest_date
+            return [
+                {"id": "1000000000000000001", "kind": "video", "create_time": int(datetime(2025, 2, 3, tzinfo=china_time).timestamp())},
+                {"id": "1000000000000000002", "kind": "gallery", "create_time": int(datetime(2025, 2, 4, tzinfo=china_time).timestamp())},
+                {"id": "1000000000000000003", "kind": "video", "create_time": int(datetime(2024, 12, 31, tzinfo=china_time).timestamp())},
+            ]
+
+        async def extract_media(self, raw, original_quality):
+            downloads = "https://media.example/1.mp4" if raw["kind"] == "video" else ["https://media.example/1.jpg"]
+            return {"id": raw["id"], "downloads": downloads}
+
+        async def stream_file(self, url, path):
+            path.write_bytes(b"x")
+
+    client = Client()
+    spec = {
+        "urls": ["https://www.douyin.com/user/MS4wLjABtest"],
+        "options": {"base-directory": str(tmp_path), "douyin": {
+            "earliest_date": "2025-01-01", "media_filter": media_filter,
+        }},
+    }
+    asyncio.run(_download_with_client(spec, client, lambda *args, **kwargs: None))
+
+    assert client.earliest == "2025-01-01"
+    assert {p.name for p in (tmp_path / "douyin" / "MS4wLjABtest").iterdir()} == expected
+
+
 def test_whoami_response_needs_authenticated_user():
     with pytest.raises(AuthError):
         require_authenticated_user({"status_code": 8, "status_msg": "用户未登录", "user": None})
@@ -283,7 +351,7 @@ def test_user_download_requires_non_empty_posts(tmp_path):
         async def resolve(self, value):
             return parse_target(value)
 
-        async def posts(self, identifier):
+        async def posts(self, identifier, earliest_date=""):
             return []
 
         async def extract_media(self, raw, original_quality):

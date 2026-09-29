@@ -29,8 +29,6 @@ public sealed partial class PixivSiteProvider : ISiteProvider
 
     public OptionSchema OptionsSchema { get; } = new(
     [
-        new OptionField("download_artworks", OptionKind.Boolean, true, "下载插画和漫画"),
-        new OptionField("download_novels", OptionKind.Boolean, true, "下载小说"),
         new OptionField("ugoira", OptionKind.Boolean, true, "下载动图（ugoira）"),
         new OptionField("novel_covers", OptionKind.Boolean, false, "同时下载小说封面"),
         new OptionField("novel_embeds", OptionKind.Boolean, false, "同时下载小说内嵌图"),
@@ -41,8 +39,6 @@ public sealed partial class PixivSiteProvider : ISiteProvider
     public IReadOnlyDictionary<string, object?> DefaultOptions { get; } =
         new Dictionary<string, object?>
         {
-            ["download_artworks"] = true,
-            ["download_novels"] = true,
             ["ugoira"] = true,
             ["novel_covers"] = false,
             ["novel_embeds"] = false,
@@ -102,7 +98,7 @@ public sealed partial class PixivSiteProvider : ISiteProvider
         string S(string k, string d) => options.TryGetValue(k, out var v) && v is string s ? s : d;
         var token = ReadRefreshToken(paths.CookiesFile);
         var subdir = kind is ContentKind.UserNovels or ContentKind.AccountNovelBookmarks ? "novels" : "artworks";
-        var directory = new[] { "{user[id]} {user[account]}", subdir };
+        var directory = new[] { "pixiv", "{user[id]} {user[account]}", subdir };
 
         var pixiv = new Dictionary<string, object?>
         {
