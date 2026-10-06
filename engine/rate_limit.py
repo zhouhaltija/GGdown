@@ -32,14 +32,35 @@ class SharedRateLimiter:
         row = self._settings.execute("SELECT Value FROM Settings WHERE Key = ?", (SETTING_KEY,)).fetchone()
         return max(0, min(1073741824, int(json.loads(row[0]) or 0))) if row else 0
 
+    def _open_state(self):
+        path = Path(self.config["state-db"])
+        path.parent.mkdir(parents=True, exist_ok=True)
+        deadline = time.monotonic() + 5
+        while True:
+            db = sqlite3.connect(path, timeout=0.1, isolation_level=None)
+            try:
+                db.execute("PRAGMA journal_mode=WAL")
+                db.execute("PRAGMA synchronous=NORMAL")
+                db.execute("CREATE TABLE IF NOT EXISTS Pace (Id INTEGER PRIMARY KEY, Rate INTEGER, Next REAL, Seen REAL)")
+                # 初始化全部成功后才发布连接，失败重试不会留下半初始化状态。
+                db.execute("PRAGMA busy_timeout=5000")
+                self._state = db
+                return
+            except BaseException as error:
+                db.close()
+                code = getattr(error, "sqlite_errorcode", 0)
+                remaining = deadline - time.monotonic()
+                # 切换 WAL 时并不总会调用 SQLite 的 busy handler，需显式处理启动竞争。
+                if (isinstance(error, sqlite3.OperationalError)
+                        and (code & 0xFF) in (sqlite3.SQLITE_BUSY, sqlite3.SQLITE_LOCKED)
+                        and remaining > 0):
+                    time.sleep(min(0.05, remaining))
+                    continue
+                raise
+
     def _reserve(self, size, rate):
         if self._state is None:
-            path = Path(self.config["state-db"])
-            path.parent.mkdir(parents=True, exist_ok=True)
-            self._state = sqlite3.connect(path, timeout=5, isolation_level=None)
-            self._state.execute("PRAGMA journal_mode=WAL")
-            self._state.execute("PRAGMA synchronous=NORMAL")
-            self._state.execute("CREATE TABLE IF NOT EXISTS Pace (Id INTEGER PRIMARY KEY, Rate INTEGER, Next REAL, Seen REAL)")
+            self._open_state()
         db = self._state
         db.execute("BEGIN IMMEDIATE")
         try:

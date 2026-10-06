@@ -101,6 +101,70 @@ def test_two_processes_cannot_each_use_the_full_limit(tmp_path):
                 process.wait()
 
 
+def test_scheduler_initialization_waits_for_existing_database_lock(tmp_path):
+    from rate_limit import SharedRateLimiter
+
+    config = make_config(tmp_path, 65536)
+    ready = threading.Event()
+    release = threading.Event()
+
+    def hold_lock():
+        db = sqlite3.connect(config["state-db"], isolation_level=None)
+        try:
+            db.execute("BEGIN IMMEDIATE")
+            ready.set()
+            release.wait(timeout=0.2)
+            db.execute("COMMIT")
+        finally:
+            db.close()
+
+    thread = threading.Thread(target=hold_lock)
+    thread.start()
+    try:
+        assert ready.wait(timeout=5)
+        with SharedRateLimiter(config) as limiter:
+            limiter.consume(1)
+    finally:
+        release.set()
+        thread.join(timeout=5)
+    assert not thread.is_alive()
+    with sqlite3.connect(config["state-db"]) as db:
+        assert db.execute("SELECT COUNT(*) FROM Pace").fetchone()[0] == 1
+
+
+def test_initialization_lock_timeout_does_not_leave_a_broken_connection(tmp_path, monkeypatch):
+    from rate_limit import SharedRateLimiter
+
+    config = make_config(tmp_path, 65536)
+    now = [100.0]
+    monkeypatch.setattr(time, "monotonic", lambda: now[0])
+    monkeypatch.setattr(time, "sleep", lambda _: now.__setitem__(0, now[0] + 1))
+    blocker = sqlite3.connect(config["state-db"], isolation_level=None)
+    with SharedRateLimiter(config) as limiter:
+        try:
+            blocker.execute("BEGIN IMMEDIATE")
+            with pytest.raises(sqlite3.OperationalError):
+                limiter.consume(1)
+            assert now[0] == 105.0
+        finally:
+            blocker.close()
+        # 同一个限速器在锁解除后仍可重新初始化，并真正预留下载额度。
+        limiter.consume(1)
+        with sqlite3.connect(config["state-db"]) as db:
+            assert db.execute("SELECT Rate FROM Pace WHERE Id=1").fetchone()[0] == 65536
+
+
+def test_corrupt_scheduler_is_not_retried_or_silently_unlimited(tmp_path, monkeypatch):
+    from rate_limit import SharedRateLimiter
+
+    config = make_config(tmp_path, 65536)
+    Path(config["state-db"]).write_bytes(b"not a sqlite database")
+    monkeypatch.setattr(time, "sleep", lambda _: pytest.fail("数据库损坏不应作为锁冲突重试"))
+    with SharedRateLimiter(config) as limiter:
+        with pytest.raises(sqlite3.DatabaseError):
+            limiter.consume(1)
+
+
 def test_gallery_receiver_uses_shared_limit_and_restores_library(tmp_path, monkeypatch):
     from rate_limit import SharedRateLimiter, limit_gallery_downloads
     from gallery_dl.downloader.http import HttpDownloader
