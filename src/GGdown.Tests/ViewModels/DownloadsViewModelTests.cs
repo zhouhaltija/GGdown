@@ -288,8 +288,10 @@ public class DownloadsViewModelTests : IDisposable
         Assert.Contains(_db.Jobs.AsNoTracking(), j => j.TargetKind == TargetKind.Search);
     }
 
-    [Fact]
-    public async Task Douyin_work_link_enqueues_permalink_without_search()
+    [Theory]
+    [InlineData("https://www.douyin.com/video/1234567890123456789", "https://www.douyin.com/video/1234567890123456789")]
+    [InlineData("0.71 o@q.eb 02/16 lcn:/ :5pm 天赋不会给你刀刻般的肌肉💪🐱 # 无敌小猫拳 # 哈基米  https://v.douyin.com/uJS3Tm5L5iI/ 复制此链接，打开Dou音搜索，直接观看视频！", "https://v.douyin.com/uJS3Tm5L5iI/")]
+    public async Task Douyin_work_link_enqueues_permalink_without_search(string input, string expectedUrl)
     {
         var douyin = new Account
         { SiteId = "douyin", CookiePath = "d", Status = AccountStatus.Ok, IsActive = true, AddedAt = DateTime.UtcNow };
@@ -304,19 +306,34 @@ public class DownloadsViewModelTests : IDisposable
             new AppSettings(new SingleGlobalDbContextFactory(_global.Item2), sites, new SiteDbContextFactory(_paths)),
             new SyncDispatcher(), site, sites);
         var gate = new TaskCompletionSource();
-        _engine.OnDownload = async (_, _, _, ct) => await gate.Task.WaitAsync(ct);
+        var planReady = new TaskCompletionSource<DownloadPlan>(TaskCreationOptions.RunContinuationsAsynchronously);
+        _engine.OnDownload = async (plan, _, progress, ct) =>
+        {
+            planReady.SetResult(plan);
+            await gate.Task.WaitAsync(ct);
+            progress.Report(new EngineEvent("job-done", Total: 0, Skipped: 0, Failed: 0));
+        };
 
         Assert.True(vm.SupportsPermalink);
         Assert.False(vm.SupportsSearch);
-        vm.PermalinkInput = "https://www.douyin.com/video/1234567890123456789";
+        Assert.Contains("分享文本", vm.PermalinkInputHint);
+        vm.PermalinkInput = input;
         await vm.DownloadPermalinkCommand.ExecuteAsync(null);
 
-        var job = Assert.Single(_db.Jobs.Where(j => j.SiteId == "douyin"));
-        Assert.Equal(TargetKind.Permalink, job.TargetKind);
-        await WaitUntil(() => _engine.Downloads.Any(d => d.Plan.SiteId == "douyin"));
-        Assert.Equal("https://www.douyin.com/video/1234567890123456789",
-            _engine.Downloads.Single(d => d.Plan.SiteId == "douyin").Plan.Urls.Single());
-        gate.SetResult();
+        try
+        {
+            var plan = await planReady.Task.WaitAsync(TimeSpan.FromSeconds(15));
+            // 后台任务暂停在引擎后再查询，避免多个上下文并发读取同一内存 SQLite 连接。
+            var job = Assert.Single(_db.Jobs.Where(j => j.SiteId == "douyin"));
+            Assert.Equal(TargetKind.Permalink, job.TargetKind);
+            Assert.Null(job.UserId);
+            Assert.Null(vm.PermalinkInput);
+            Assert.Equal(expectedUrl, plan.Urls.Single());
+        }
+        finally
+        {
+            gate.TrySetResult();
+        }
         await WaitUntil(() => queue.Active.Count == 0);
     }
 

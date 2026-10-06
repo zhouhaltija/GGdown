@@ -96,16 +96,20 @@ def cmd_download(args):
     emit_hello()
     with open(args.job, encoding="utf-8") as f:
         spec = json.load(f)
-    apply_options(spec.get("options", {}))
+    options = dict(spec.get("options", {}))
+    from rate_limit import SharedRateLimiter, limit_gallery_downloads
+    rate_config = options.pop("ggdown-rate-limit", None)
+    apply_options(options)
     config.set(("extractor", args.site), "cookies", args.cookies)  # CLI 参数覆盖，双保险
     counters = {"started": 0, "done": 0, "skipped": 0, "failed": 0}
     output.select = lambda: EventOutput(counters)
     # gallery-dl 的 logger（"gallery-dl" 及类别名如 "twitter"）均向 root 传播；
     # 按库使用时 setup_logging 不会被触发，root 上无冲突 handler
     logging.getLogger().addHandler(CountingLogHandler(counters))
-    for url in spec["urls"]:
-        emit("url-start", url=url)
-        job.DownloadJob(url).run()
+    with SharedRateLimiter(rate_config) as limiter, limit_gallery_downloads(limiter):
+        for url in spec["urls"]:
+            emit("url-start", url=url)
+            job.DownloadJob(url).run()
     total = counters["done"] + counters["skipped"] + counters["failed"]
     emit("job-done", total=total, skipped=counters["skipped"], failed=counters["failed"])
 

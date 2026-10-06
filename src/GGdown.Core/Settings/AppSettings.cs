@@ -13,6 +13,8 @@ public interface IAppSettings
     Task SetDownloadDirectoryAsync(string directory, CancellationToken ct = default);
     Task<int> GetConcurrencyAsync(CancellationToken ct = default);
     Task SetConcurrencyAsync(int concurrency, CancellationToken ct = default);
+    Task<long> GetDownloadRateLimitAsync(CancellationToken ct = default);
+    Task SetDownloadRateLimitAsync(long bytesPerSecond, CancellationToken ct = default);
     Task<ProxyConfig> GetProxyAsync(CancellationToken ct = default);
     Task SetProxyAsync(ProxyConfig proxy, CancellationToken ct = default);
     Task<string> GetCurrentSiteIdAsync(CancellationToken ct = default);
@@ -57,6 +59,15 @@ public sealed class AppSettings(
 
     public async Task SetConcurrencyAsync(int concurrency, CancellationToken ct = default) =>
         await SetGlobalAsync("download.concurrency", Math.Max(1, concurrency), ct);
+
+    public const string DownloadRateLimitKey = "download.rateLimitBytesPerSecond";
+    public const long MaxDownloadRateLimit = 1073741824;
+
+    public async Task<long> GetDownloadRateLimitAsync(CancellationToken ct = default) =>
+        Math.Clamp(await GetGlobalAsync<long?>(DownloadRateLimitKey, 0, ct) ?? 0, 0, MaxDownloadRateLimit);
+
+    public Task SetDownloadRateLimitAsync(long bytesPerSecond, CancellationToken ct = default) =>
+        SetGlobalAsync(DownloadRateLimitKey, Math.Clamp(bytesPerSecond, 0, MaxDownloadRateLimit), ct);
 
     public async Task<ProxyConfig> GetProxyAsync(CancellationToken ct = default) =>
         await GetGlobalAsync<ProxyConfig>("network.proxy", null, ct) ?? new ProxyConfig();

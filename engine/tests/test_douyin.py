@@ -1,5 +1,6 @@
 import sys
 import asyncio
+import json
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
@@ -85,6 +86,97 @@ def test_client_quality_follows_third_party_video_selection():
     assert normal["downloads"] == "https://media.example/high.mp4"
     original = asyncio.run(client.extract_media(raw, original_quality=True))
     assert original["downloads"] == "https://media.example/original.mp4"
+
+
+def share_page(item):
+    data = {"loaderData": {"video_(id)/page": {"videoInfoRes": {"item_list": [item]}}}}
+    return "<script>window._ROUTER_DATA = " + json.dumps(data) + ";</script>"
+
+
+def test_detail_falls_back_to_mobile_share_page_when_api_is_empty(monkeypatch):
+    from src.interface import detail as detail_module
+
+    async def empty_detail(self):
+        return []
+
+    monkeypatch.setattr(detail_module.Detail, "run", empty_detail)
+    raw = {"aweme_id": "1234567890123456789", "video": {"play_addr": {"url_list": ["https://media.example/video.mp4"]}}}
+    session = FakeSession({})
+    response = FakeResponse({})
+    response.text = share_page(raw)
+
+    async def get(url, **kwargs):
+        session.calls.append((url, kwargs))
+        return response
+
+    session.get = get
+    result = asyncio.run(DouyinClient(session, "sessionid=fictional").detail(raw["aweme_id"]))
+
+    assert result == raw
+    url, request = session.calls[0]
+    assert url.startswith("https://www.iesdouyin.com/share/video/1234567890123456789/")
+    assert "Mobile" in request["headers"]["User-Agent"]
+    assert "Cookie" not in request["headers"]
+
+
+def test_detail_keeps_api_result_without_requesting_share_page(monkeypatch):
+    from src.interface import detail as detail_module
+
+    raw = {"aweme_id": "1234567890123456789", "video": {}}
+
+    async def api_detail(self):
+        return raw
+
+    monkeypatch.setattr(detail_module.Detail, "run", api_detail)
+    session = FakeSession({})
+    assert asyncio.run(DouyinClient(session, "sessionid=fictional").detail(raw["aweme_id"])) == raw
+    assert session.calls == []
+
+
+@pytest.mark.parametrize("html", [
+    "<html>请求被拒绝</html>",
+    "<script>window._ROUTER_DATA = invalid;</script>",
+    "<script>window._ROUTER_DATA = {};</script>",
+    share_page({"aweme_id": "9999999999999999999", "video": {}}),
+])
+def test_detail_rejects_unavailable_or_wrong_share_work(monkeypatch, html):
+    from src.interface import detail as detail_module
+
+    async def empty_detail(self):
+        return []
+
+    monkeypatch.setattr(detail_module.Detail, "run", empty_detail)
+    response = FakeResponse({})
+    response.text = html
+
+    async def get(*args, **kwargs):
+        return response
+
+    session = FakeSession({})
+    session.get = get
+    with pytest.raises(ValueError, match="未取得抖音作品详情"):
+        asyncio.run(DouyinClient(session, "sessionid=fictional").detail("1234567890123456789"))
+
+
+def test_video_without_bitrates_uses_share_play_address():
+    raw = {
+        "aweme_id": "1234567890123456789", "create_time": 1700000000,
+        "video": {"bit_rate": None, "play_addr": {"uri": "v123", "url_list": ["https://media.example/share.mp4"]}},
+    }
+    media = asyncio.run(DouyinClient(FakeSession({}), "").extract_media(raw, original_quality=False))
+    assert media_files(media)[0]["url"] == "https://media.example/share.mp4"
+
+
+@pytest.mark.parametrize("video", [
+    ["错误的视频结构"],
+    {"play_addr": ["错误的播放地址结构"]},
+    {"play_addr": {"url_list": {"url": "https://media.example/video.mp4"}}},
+])
+def test_share_video_with_malformed_play_address_reports_media_error(video):
+    raw = {"aweme_id": "1234567890123456789", "video": video}
+    with pytest.raises(ValueError, match="作品媒体地址无效"):
+        media = asyncio.run(DouyinClient(FakeSession({}), "").extract_media(raw, original_quality=False))
+        media_files(media)
 
 
 def test_media_stream_does_not_send_login_cookie_to_media_host(tmp_path):
@@ -312,6 +404,41 @@ def test_download_emits_file_events_and_archive_skip(tmp_path):
     assert client.transfers == 1
     assert [name for name, _ in events] == ["url-start", "file-skip", "job-done"]
     assert events[-1][1] == {"total": 1, "skipped": 1, "failed": 0}
+
+
+def test_single_work_download_rejects_short_link_to_user(tmp_path):
+    class UserLinkClient(FakeDownloadClient):
+        async def resolve(self, value):
+            return "user", "MS4wLjABtest"
+
+        async def posts(self, identifier, earliest_date=""):
+            pytest.fail("单条作品下载不应请求作者作品列表")
+
+    spec = {
+        "urls": ["https://v.douyin.com/uJS3Tm5L5iI/"],
+        "options": {"base-directory": str(tmp_path), "douyin": {"target_kind": "work"}},
+    }
+    with pytest.raises(ValueError, match="请输入单条作品链接"):
+        asyncio.run(_download_with_client(spec, UserLinkClient(), lambda *args, **kwargs: None))
+    assert not (tmp_path / "douyin").exists()
+
+
+def test_single_work_download_resolves_short_link_and_downloads_one_video(tmp_path):
+    class WorkLinkClient(FakeDownloadClient):
+        async def resolve(self, value):
+            assert parse_target(value) == ("short", "https://v.douyin.com/uJS3Tm5L5iI/")
+            return "work", "1234567890123456789"
+
+    client = WorkLinkClient()
+    events = []
+    spec = {
+        "urls": ["0.71 天赋不会给你刀刻般的肌肉💪🐱 https://v.douyin.com/uJS3Tm5L5iI/ 复制此链接，打开Dou音搜索，直接观看视频！"],
+        "options": {"base-directory": str(tmp_path), "douyin": {"target_kind": "work", "original_quality": True}},
+    }
+    asyncio.run(_download_with_client(spec, client, lambda ev, **data: events.append((ev, data))))
+    assert client.transfers == 1
+    assert (tmp_path / "douyin" / "_links" / "1234567890123456789_1.mp4").read_bytes() == b"abc"
+    assert events[-1] == ("job-done", {"total": 1, "skipped": 0, "failed": 0})
 
 
 def test_failed_transfer_cleans_partial_file_and_counts_failure(tmp_path):

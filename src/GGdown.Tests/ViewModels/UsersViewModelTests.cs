@@ -460,6 +460,17 @@ public class UsersViewModelTests : IDisposable
         Assert.False(vm.CanShowFollowingList);
         Assert.False(vm.ShowFollowingListCommand.CanExecute(null));
         Assert.False(Assert.Single(vm.Users).ShowHighlights);
+
+        Assert.True(vm.SupportsSingleVideoDownload);
+        var requests = 0;
+        vm.ShowSingleVideoDownloadRequested += () => requests++;
+        Assert.True(vm.ShowSingleVideoDownloadCommand.CanExecute(null));
+        vm.ShowSingleVideoDownloadCommand.Execute(null);
+        Assert.Equal(1, requests);
+
+        await site.SelectAsync("twitter");
+        Assert.False(vm.SupportsSingleVideoDownload);
+        Assert.False(vm.ShowSingleVideoDownloadCommand.CanExecute(null));
     }
 
     [Fact]

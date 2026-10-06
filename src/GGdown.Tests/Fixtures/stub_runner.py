@@ -46,6 +46,9 @@ def main():
         with open(job_path, encoding="utf-8") as f:
             spec = json.load(f)
         opts = spec.get("options") or {}
+        if opts.get("capture_spec"):
+            with open(opts["capture_spec"], "w", encoding="utf-8") as f:
+                json.dump(spec, f)
         if opts.get("fail"):
             emit("fatal", msg="boom")
             return 1

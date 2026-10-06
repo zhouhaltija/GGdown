@@ -322,6 +322,9 @@ public partial class DownloadsViewModel : StatusViewModel
         && _sites.Get(SiteId).SupportedKinds.Contains(ContentKind.Permalink);
     /// <summary>Twitter 的搜索框已能识别推文/列表链接，同时支持两者时只留一个输入框。</summary>
     public bool ShowPermalinkInput => SupportsPermalink && !SupportsSearch;
+    public string PermalinkInputHint => SiteId == DouyinSiteProvider.Id
+        ? "粘贴视频链接或整段分享文本（回车下载）"
+        : "粘贴单条作品链接（回车下载）";
     public bool ShowComingSoon => IsPlatformView && !_currentSite.IsAvailable;
     public string ComingSoonMessage => $"{_currentSite.Current.DisplayName} 即将支持，该站点尚未开放下载。";
 
@@ -332,6 +335,7 @@ public partial class DownloadsViewModel : StatusViewModel
         OnPropertyChanged(nameof(SupportsSearch));
         OnPropertyChanged(nameof(SupportsPermalink));
         OnPropertyChanged(nameof(ShowPermalinkInput));
+        OnPropertyChanged(nameof(PermalinkInputHint));
         OnPropertyChanged(nameof(ShowComingSoon));
         OnPropertyChanged(nameof(ComingSoonMessage));
         RebuildAccountActions();

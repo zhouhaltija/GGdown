@@ -1,0 +1,50 @@
+name: CI
+
+on:
+  push:
+    branches: ['**']
+  pull_request:
+  workflow_call:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: windows-2022
+    timeout-minutes: 25
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '8.0.x'
+      - uses: astral-sh/setup-uv@v6
+        with:
+          version: '0.11.32'
+          enable-cache: true
+          cache-dependency-glob: engine/uv.lock
+      - name: 准备引擎源码与锁定依赖
+        run: |
+          ./scripts/prepare-dependencies.ps1
+          uv sync --project engine --locked
+          if ($LASTEXITCODE -ne 0) { throw '安装测试依赖失败' }
+      - name: C# 测试
+        run: dotnet test src/GGdown.sln -c Release --logger 'trx;LogFileName=tests.trx' --results-directory TestResults
+      - name: Python 测试
+        run: uv run --project engine --locked python -m pytest engine/tests -q --junitxml=TestResults/python.xml
+      - name: 构建 Windows 应用
+        run: dotnet build src/GGdown.App/GGdown.App.csproj -c Debug -p:Platform=x64
+      - name: 保存测试报告
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-results
+          path: TestResults/
+          if-no-files-found: warn
+          retention-days: 14

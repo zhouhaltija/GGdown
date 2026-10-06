@@ -42,6 +42,23 @@ public class GlobalSettingsViewModelTests : IDisposable
 
     private readonly GGdownSiteDbContext _db;
 
+    [Fact]
+    public async Task Download_rate_loads_in_kib_and_auto_saves_changes()
+    {
+        await _settings.SetDownloadRateLimitAsync(524288);
+        await _vm.StartAsync();
+        Assert.Equal(512, _vm.DownloadRateLimitKiB);
+        _vm.DownloadRateLimitKiB = 1024;
+        for (var i = 0; i < 100 && await _settings.GetDownloadRateLimitAsync() != 1048576; i++)
+            await Task.Delay(10);
+        Assert.Equal(1048576, await _settings.GetDownloadRateLimitAsync());
+        _vm.DownloadRateLimitKiB = double.NaN;
+        Assert.Equal(1048576, await _settings.GetDownloadRateLimitAsync());
+        _vm.DownloadRateLimitKiB = 0;
+        await _vm.SaveGeneralCommand.ExecuteAsync(null);
+        Assert.Equal(0, await _settings.GetDownloadRateLimitAsync());
+    }
+
     public void Dispose()
     {
         _t.Item1.Dispose();

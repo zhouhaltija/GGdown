@@ -48,19 +48,24 @@ for this lock file is:
 | PSF-2.0 | typing-extensions 4.16.0 |
 
 The gallery-dl wheel also retains its license in `site-packages`; the
-separate `licenses/gallery-dl-LICENSE` is copied from the local source tree.
+separate `licenses/gallery-dl-LICENSE` is copied from the same pinned wheel.
 
 ## Release build prerequisites
 
-Install `uv` and `git`, then check out
-`https://github.com/JoeanAmier/TikTokDownloader` into
-`third_party/TikTokDownloader` and check out commit
-`473c90ff70c663cfb69310fff2b8d5192f200661`.
-Keep the existing `gallery-dl/LICENSE` source checkout. Run
-`pwsh scripts/build.ps1`; the script checks these local files and the
-DouK-Downloader commit before removing `dist/`. The build uses uv's
-Python 3.13.7 and `engine/uv.lock` to install dependencies into the
-bundled Python 3.13.7 environment. End users do not need uv.
+Install .NET 8 SDK, PowerShell 7, `uv`, `git`, and Inno Setup 6 or 7.
+Run `pwsh scripts/build.ps1 -AppVersion 1.0.0`. The script automatically
+fetches `https://github.com/JoeanAmier/TikTokDownloader` into
+`third_party/TikTokDownloader` at commit
+`473c90ff70c663cfb69310fff2b8d5192f200661`; an existing checkout must match
+that commit and have no tracked modifications. The build uses uv's
+Python 3.13.7 and `engine/uv.lock` to install hash-locked dependencies into
+the bundled Python environment, and copies the wheel's gallery-dl license.
+It includes all top-level engine Python modules, including `rate_limit.py`.
+End users do not need uv or a separate Python installation.
+
+Tags such as `v1.0.0` trigger `.github/workflows/release.yml`: tests,
+Windows x64 publishing, installer compilation, SHA-256 generation, and
+GitHub Release asset upload. See `README.md` for release commands.
 
 ## Simple Icons
 

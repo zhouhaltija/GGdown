@@ -119,7 +119,13 @@ public sealed class SingleDbContextFactory(DbContext db) : IDbContextFactory<GGd
 /// </summary>
 public sealed class SyncDispatcher : IUiDispatcher
 {
-    public void Post(Action action) => action();
+    private readonly object _gate = new();
+
+    public void Post(Action action)
+    {
+        // 真实 UI 队列会串行执行；测试中也不能让后台事件同时修改绑定集合。
+        lock (_gate) action();
+    }
 }
 
 public sealed class FakeCurrentSite : GGdown.Sites.ICurrentSite
@@ -200,6 +206,8 @@ public sealed class FakeAppSettings : GGdown.Settings.IAppSettings
     public Task SetDownloadDirectoryAsync(string directory, CancellationToken ct = default) => Task.CompletedTask;
     public Task<int> GetConcurrencyAsync(CancellationToken ct = default) => Task.FromResult(1);
     public Task SetConcurrencyAsync(int concurrency, CancellationToken ct = default) => Task.CompletedTask;
+    public Task<long> GetDownloadRateLimitAsync(CancellationToken ct = default) => Task.FromResult(0L);
+    public Task SetDownloadRateLimitAsync(long bytesPerSecond, CancellationToken ct = default) => Task.CompletedTask;
     public Task<GGdown.Settings.ProxyConfig> GetProxyAsync(CancellationToken ct = default) =>
         Task.FromResult(new GGdown.Settings.ProxyConfig());
     public Task SetProxyAsync(GGdown.Settings.ProxyConfig proxy, CancellationToken ct = default) => Task.CompletedTask;

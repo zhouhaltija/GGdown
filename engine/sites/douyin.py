@@ -2,6 +2,7 @@
 
 import asyncio
 import http.cookiejar
+import json
 import os
 import re
 import sys
@@ -21,6 +22,11 @@ if _third_party.is_dir() and str(_third_party) not in sys.path:
 _URL = re.compile(r"https?://[^\s，。；！？、【】《》]+", re.IGNORECASE)
 _SEC_USER_ID = re.compile(r"[A-Za-z0-9_-]{8,}\Z")
 _WORK_ID = re.compile(r"\d{19}\Z")
+_ROUTER_DATA = re.compile(r"window\._ROUTER_DATA\s*=\s*")
+_MOBILE_USER_AGENT = (
+    "Mozilla/5.0 (iPhone; CPU iPhone OS 17_4 like Mac OS X) "
+    "AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.4 Mobile/15E148 Safari/604.1"
+)
 
 
 def read_netscape_cookies(path: str) -> str:
@@ -188,6 +194,7 @@ class DouyinClient:
 
         self.session = session
         self.cookies = cookies
+        self.rate_limiter = None
         self.params = SimpleNamespace(
             headers=DATA_HEADERS | {"Cookie": cookies},
             logger=_QuietLogger(), douyin_params=DouYinParams(),
@@ -238,9 +245,39 @@ class DouyinClient:
         from src.interface.detail import Detail
 
         raw = await Detail(self.params, cookie=self.cookies, detail_id=identifier).run()
-        if not isinstance(raw, dict) or not raw:
-            raise ValueError("未取得抖音作品详情")
-        return raw
+        if isinstance(raw, dict) and raw:
+            return raw
+        return await self._share_detail(identifier)
+
+    async def _share_detail(self, identifier: str) -> dict:
+        from curl_cffi.requests.exceptions import RequestException
+
+        # Web 接口有时拒绝单条详情请求；移动分享页仍可能包含同一作品的公开数据。
+        # 该域名不需要登录 Cookie，只读取 JSON，不执行页面脚本。
+        url = (
+            f"https://www.iesdouyin.com/share/video/{identifier}/"
+            "?region=CN&titleType=title&from_aid=1128&from=web_code_link"
+        )
+        try:
+            response = await self.session.get(
+                url, headers={"User-Agent": _MOBILE_USER_AGENT}, impersonate="safari17_0",
+            )
+            response.raise_for_status()
+            match = _ROUTER_DATA.search(response.text)
+            if match:
+                data, _ = json.JSONDecoder().raw_decode(response.text[match.end():])
+                loaders = data.get("loaderData") if isinstance(data, dict) else None
+                if isinstance(loaders, dict):
+                    for loader in loaders.values():
+                        info = loader.get("videoInfoRes") if isinstance(loader, dict) else None
+                        items = info.get("item_list") if isinstance(info, dict) else None
+                        if isinstance(items, list):
+                            for item in items:
+                                if isinstance(item, dict) and str(item.get("aweme_id")) == identifier:
+                                    return item
+        except (RequestException, ValueError):
+            pass
+        raise ValueError("未取得抖音作品详情：接口与分享页均未返回作品，请确认链接可访问或稍后重试")
 
     async def extract_media(self, raw: dict, original_quality: bool) -> dict:
         from src.extract import Extractor
@@ -249,10 +286,33 @@ class DouyinClient:
         result = await Extractor(self.params).run([raw], _NullRecorder(), type_="detail")
         if not result:
             raise ValueError("作品没有可下载的媒体")
-        return result[0]
+        item = result[0]
+        # 分享页可能没有码率列表；这时使用页面提供的播放地址。
+        if not item.get("downloads") and not raw.get("images"):
+            video = raw.get("video")
+            play = video.get("play_addr") if isinstance(video, dict) else None
+            urls = play.get("url_list") if isinstance(play, dict) else None
+            if isinstance(urls, list):
+                item["downloads"] = next((
+                    url for url in reversed(urls)
+                    if isinstance(url, str) and url.startswith(("https://", "http://"))
+                ), "")
+        return item
 
     async def stream_file(self, url: str, path: Path) -> None:
         from src.custom import DOWNLOAD_HEADERS
+
+        if self.rate_limiter is not None:
+            # 在 libcurl 接收回调中等待，避免异步流在后台把整个视频预先缓存下来。
+            with path.open("wb") as target:
+                def receive(chunk):
+                    self.rate_limiter.consume(len(chunk))
+                    return target.write(chunk)
+                response = await self.session.get(
+                    url, headers=DOWNLOAD_HEADERS, content_callback=receive, timeout=None,
+                )
+                response.raise_for_status()
+            return
 
         async with self.session.stream("GET", url, headers=DOWNLOAD_HEADERS) as response:
             response.raise_for_status()
@@ -267,7 +327,10 @@ async def _with_client(cookies_path: str, operation):
 
     cookies = read_netscape_cookies(cookies_path)
     proxy = os.environ.get("ALL_PROXY") or os.environ.get("HTTPS_PROXY") or os.environ.get("HTTP_PROXY")
-    async with AsyncSession(timeout=20, impersonate=IMPERSONATE, proxy=proxy) as session:
+    from curl_cffi import CurlOpt
+    async with AsyncSession(timeout=20, impersonate=IMPERSONATE, proxy=proxy, curl_options={
+        CurlOpt.CONNECTTIMEOUT_MS: 20000, CurlOpt.LOW_SPEED_LIMIT: 1, CurlOpt.LOW_SPEED_TIME: 60,
+    }) as session:
         return await operation(DouyinClient(session, cookies))
 
 
@@ -289,10 +352,14 @@ def user_info(cookies_path: str, value: str) -> dict:
 
 
 def download(cookies_path: str, spec: dict, emit_event) -> None:
-    return asyncio.run(_with_client(
-        cookies_path,
-        lambda client: _download_with_client(spec, client, emit_event),
-    ))
+    from rate_limit import SharedRateLimiter
+
+    async def run(client, limiter):
+        client.rate_limiter = limiter if limiter.config else None
+        await _download_with_client(spec, client, emit_event)
+
+    with SharedRateLimiter((spec.get("options") or {}).get("ggdown-rate-limit")) as limiter:
+        return asyncio.run(_with_client(cookies_path, lambda client: run(client, limiter)))
 
 
 async def _download_with_client(spec: dict, client, emit_event) -> None:
@@ -317,6 +384,8 @@ async def _download_with_client(spec: dict, client, emit_event) -> None:
 
     for input_url in spec.get("urls") or []:
         kind, identifier = await client.resolve(input_url)
+        if site_options.get("target_kind") == "work" and kind != "work":
+            raise ValueError("请输入单条作品链接，不能使用用户主页链接")
         if kind == "user":
             canonical = f"https://www.douyin.com/user/{identifier}"
             raw_items = await client.posts(identifier, earliest_date)

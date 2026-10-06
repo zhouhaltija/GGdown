@@ -56,6 +56,16 @@ public class AppSettingsTests : IDisposable
     }
 
     [Fact]
+    public async Task Download_rate_defaults_to_unlimited_and_persists_bytes_per_second()
+    {
+        Assert.Equal(0, await _settings.GetDownloadRateLimitAsync());
+        await _settings.SetDownloadRateLimitAsync(524288);
+        Assert.Equal(524288, await _settings.GetDownloadRateLimitAsync());
+        await _settings.SetDownloadRateLimitAsync(-1);
+        Assert.Equal(0, await _settings.GetDownloadRateLimitAsync());
+    }
+
+    [Fact]
     public async Task Site_options_fall_back_to_provider_defaults()
     {
         var d = await _settings.GetSiteOptionsAsync("twitter");

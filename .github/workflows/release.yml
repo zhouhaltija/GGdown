@@ -1,0 +1,96 @@
+name: Windows Release
+
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  test:
+    uses: ./.github/workflows/ci.yml
+
+  build:
+    needs: test
+    runs-on: windows-2022
+    timeout-minutes: 45
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+      prerelease: ${{ steps.version.outputs.prerelease }}
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: 校验 tag 版本
+        id: version
+        env:
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: |
+          if ($env:RELEASE_TAG -notmatch '^v(\d+\.\d+\.\d+(?:-[0-9A-Za-z]+(?:[.-][0-9A-Za-z]+)*)?)$') {
+            throw 'tag 须为 v1.2.3 或 v1.2.3-rc.1'
+          }
+          $version = $Matches[1]
+          "version=$version" >> $env:GITHUB_OUTPUT
+          "prerelease=$($version.Contains('-').ToString().ToLowerInvariant())" >> $env:GITHUB_OUTPUT
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '8.0.x'
+      - uses: astral-sh/setup-uv@v6
+        with:
+          version: '0.11.32'
+          enable-cache: true
+          cache-dependency-glob: engine/uv.lock
+      - name: 准备 Inno Setup
+        run: |
+          if (-not (Test-Path 'C:/Program Files (x86)/Inno Setup 6/ISCC.exe') -and
+              -not (Test-Path 'C:/Program Files (x86)/Inno Setup 7/ISCC.exe') -and
+              -not (Test-Path 'C:/Program Files/Inno Setup 7/ISCC.exe')) {
+            choco install innosetup --yes --no-progress
+            if ($LASTEXITCODE -ne 0) { throw '安装 Inno Setup 失败' }
+          }
+      - name: 构建安装包
+        env:
+          APP_VERSION: ${{ steps.version.outputs.version }}
+        run: ./scripts/build.ps1 -AppVersion $env:APP_VERSION
+      - uses: actions/upload-artifact@v4
+        with:
+          name: windows-installer
+          path: |
+            dist/GGdown-Setup-*.exe
+            dist/GGdown-Setup-*.exe.sha256
+          if-no-files-found: error
+          retention-days: 30
+
+  release:
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: windows-installer
+          path: artifacts
+      - name: 创建或更新 GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          RELEASE_TAG: ${{ github.ref_name }}
+          PRERELEASE: ${{ needs.build.outputs.prerelease }}
+        run: |
+          set -euo pipefail
+          if gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
+            gh release upload "$RELEASE_TAG" artifacts/* --clobber
+          else
+            flags=()
+            if [ "$PRERELEASE" = "true" ]; then flags+=(--prerelease); fi
+            gh release create "$RELEASE_TAG" artifacts/* --verify-tag --generate-notes "${flags[@]}"
+          fi

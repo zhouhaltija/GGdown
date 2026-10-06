@@ -16,6 +16,11 @@
                            AutomationProperties.Name="并发下载数"
                            SpinButtonPlacementMode="Compact" Width="160"/>
             </controls:SettingsCard>
+            <controls:SettingsCard Header="总下载限速（KB/s）" Description="0 表示不限速；所有平台和并发任务共享此额度，修改后立即生效">
+                <NumberBox Value="{x:Bind Vm.DownloadRateLimitKiB, Mode=TwoWay}" Minimum="0" Maximum="1048576"
+                           SmallChange="256" LargeChange="1024" AutomationProperties.Name="总下载限速，单位 KB 每秒"
+                           SpinButtonPlacementMode="Compact" Width="160"/>
+            </controls:SettingsCard>
         </StackPanel>
     </ScrollViewer>
 </Page>

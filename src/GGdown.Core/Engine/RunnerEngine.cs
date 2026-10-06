@@ -83,7 +83,17 @@ public sealed class RunnerEngine(
         {
             var planOptions = plan.Options;
             if (settings is not null)
+            {
                 planOptions = ProxyConfig.MergeIntoOptions(planOptions, (await settings.GetProxyAsync(ct)).ToUrl());
+                planOptions = new Dictionary<string, object?>(planOptions)
+                {
+                    ["ggdown-rate-limit"] = new Dictionary<string, object?>
+                    {
+                        ["settings-db"] = paths.DbFile,
+                        ["state-db"] = Path.Combine(paths.TempDir, "download-rate.db"),
+                    },
+                };
+            }
             var payload = new Dictionary<string, object?>
             {
                 ["urls"] = plan.Urls,

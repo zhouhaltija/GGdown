@@ -63,7 +63,11 @@ public sealed partial class MainWindow : Window
             AppWindow.SetIcon(iconPath);
 
         // —— 导航接线：VM 发意图，本类映射页面类型并导航 ——
-        Nav.TabNavigationRequested += k => Navigate(SitePages[k]);
+        Nav.TabNavigationRequested += k =>
+        {
+            Navigate(SitePages[k]);
+            SyncChrome(); // 页面内的快捷入口也要同步顶部标签选中态。
+        };
         Nav.GlobalTabNavigationRequested += k => Navigate(GlobalSettingsPages[k]);
         Nav.GlobalSettingsNavigationRequested += () => Navigate(typeof(GeneralSettingsPage)); // 进设置默认落通用页
         Nav.CurrentTabs.CollectionChanged += (_, _) => RebuildTabs();

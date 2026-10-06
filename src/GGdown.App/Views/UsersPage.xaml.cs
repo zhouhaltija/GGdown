@@ -2,6 +2,7 @@ using System.ComponentModel;
 using GGdown.App.Infrastructure;
 using GGdown.App.Views.Dialogs;
 using GGdown.ViewModels;
+using GGdown.Sites;
 using CommunityToolkit.WinUI.UI.Controls;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.UI.Xaml;
@@ -24,10 +25,25 @@ public sealed partial class UsersPage : Page
         InitializeComponent();
         // B4 接线：占位事件 → ContentDialog（对话框为页面级 UI，不进 VM）
         Vm.ShowAddUserRequested += OnShowAddUserRequested;
+        Vm.ShowSingleVideoDownloadRequested += OnShowSingleVideoDownloadRequested;
         Vm.ShowImportCookieRequested += OnShowImportCookieRequested;
         Vm.ShowFollowingListRequested += OnShowFollowingListRequested;
         Vm.EditUserDateRequested += OnEditUserDateRequested;
         Vm.ConfirmDeleteAsync = ConfirmDeleteAsync;
+    }
+
+    private async void OnShowSingleVideoDownloadRequested()
+    {
+        try
+        {
+            await App.Readiness;
+            var nav = App.Current.Services.GetRequiredService<MainNavViewModel>();
+            await nav.SelectTabAsync(SitePageKey.Downloads);
+        }
+        catch (Exception ex)
+        {
+            Vm.StatusMessage = $"打开下载页失败：{ex.Message}";
+        }
     }
 
     // 删除确认：删的是库里的用户记录，已下载的文件不受影响

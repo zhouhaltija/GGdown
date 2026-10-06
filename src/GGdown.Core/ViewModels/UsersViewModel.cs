@@ -212,6 +212,7 @@ public partial class UsersViewModel : StatusViewModel
         OpenProfileCommand = new RelayCommand<UserRowViewModel>(OpenProfileCore);
         OpenFolderCommand = new AsyncRelayCommand<UserRowViewModel>(OpenFolderCoreAsync);
         ShowAddUserCommand = new RelayCommand(() => ShowAddUserRequested?.Invoke());
+        ShowSingleVideoDownloadCommand = new RelayCommand(() => ShowSingleVideoDownloadRequested?.Invoke(), () => SupportsSingleVideoDownload);
         ShowImportCookieCommand = new RelayCommand(() => ShowImportCookieRequested?.Invoke());
         ShowFollowingListCommand = new RelayCommand(() => ShowFollowingListRequested?.Invoke(), () => CanShowFollowingList);
         IncrementalDownloadCommand = new AsyncRelayCommand(DownloadIncrementalAsync);
@@ -239,6 +240,8 @@ public partial class UsersViewModel : StatusViewModel
         && SiteId is TwitterSiteProvider.Id or DouyinSiteProvider.Id;
     public bool CanShowFollowingList => _hasAccount && SupportsFollowingList;
     public bool ShowManualAddGuide => _currentSite.IsAvailable && SiteId == DouyinSiteProvider.Id;
+    public bool SupportsSingleVideoDownload => _currentSite.IsAvailable && SiteId == DouyinSiteProvider.Id
+        && _sites.IsRegistered(SiteId) && _sites.Get(SiteId).SupportedKinds.Contains(ContentKind.Permalink);
     public bool BottomBarVisible => SelectedCount > 0;
     public bool IsSiteAvailable => _currentSite.IsAvailable;
     public bool ShowComingSoon => !_currentSite.IsAvailable;
@@ -265,6 +268,7 @@ public partial class UsersViewModel : StatusViewModel
 
     public event Action? RequestReload;                     // B4 导入流程完成后通知刷新
     public event Action? ShowAddUserRequested;              // B4 接线：添加用户对话框
+    public event Action? ShowSingleVideoDownloadRequested;
     public event Action? ShowImportCookieRequested;         // B4 接线：导入 Cookie 对话框
     public event Action? ShowFollowingListRequested;        // 关注列表勾选添加
     public event Action<UserRowViewModel>? EditUserDateRequested;
@@ -279,6 +283,7 @@ public partial class UsersViewModel : StatusViewModel
     public IRelayCommand<UserRowViewModel> OpenProfileCommand { get; }
     public IAsyncRelayCommand<UserRowViewModel> OpenFolderCommand { get; }
     public IRelayCommand ShowAddUserCommand { get; }
+    public IRelayCommand ShowSingleVideoDownloadCommand { get; }
     public IRelayCommand ShowImportCookieCommand { get; }
     public IRelayCommand ShowFollowingListCommand { get; }
     public IAsyncRelayCommand IncrementalDownloadCommand { get; }
@@ -357,6 +362,7 @@ public partial class UsersViewModel : StatusViewModel
                 OnPropertyChanged(nameof(CanShowFollowingList));
                 OnPropertyChanged(nameof(SupportsFollowingList));
                 OnPropertyChanged(nameof(SupportsIncrementalDownload));
+                OnPropertyChanged(nameof(SupportsSingleVideoDownload));
                 OnPropertyChanged(nameof(ShowManualAddGuide));
                 OnPropertyChanged(nameof(IsSiteAvailable));
                 OnPropertyChanged(nameof(ShowComingSoon));
@@ -365,6 +371,7 @@ public partial class UsersViewModel : StatusViewModel
                 OnPropertyChanged(nameof(SiteDisplayName));
                 OnPropertyChanged(nameof(ComingSoonMessage));
                 ShowFollowingListCommand.NotifyCanExecuteChanged();
+                ShowSingleVideoDownloadCommand.NotifyCanExecuteChanged();
                 NotifySelection();
                 ApplyDownloadingState();
             });

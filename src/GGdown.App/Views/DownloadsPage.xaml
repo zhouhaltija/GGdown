@@ -98,7 +98,7 @@
                     <ColumnDefinition Width="*"/>
                     <ColumnDefinition Width="Auto"/>
                 </Grid.ColumnDefinitions>
-                <TextBox PlaceholderText="粘贴单条作品链接（回车下载）"
+                <TextBox PlaceholderText="{x:Bind Vm.PermalinkInputHint, Mode=OneWay}"
                          AutomationProperties.Name="作品链接"
                          Text="{x:Bind Vm.PermalinkInput, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
                          KeyDown="OnPermalinkKeyDown"/>

@@ -100,8 +100,13 @@ public sealed partial class DouyinSiteProvider : ISiteProvider
                 ?? throw new ArgumentException("单条作品下载需要链接", nameof(target)),
             _ => throw new ArgumentOutOfRangeException(nameof(kind), kind, null),
         };
-        if (kind == ContentKind.Permalink && !ParseInput(url).Ok)
-            throw new ArgumentException("无效的抖音作品链接", nameof(target));
+        if (kind == ContentKind.Permalink)
+        {
+            var parsed = ParseInput(url);
+            if (!parsed.Ok || parsed.Kind != PasteKind.Work || parsed.DirectUrl is null)
+                throw new ArgumentException("无效的抖音作品链接", nameof(target));
+            url = parsed.DirectUrl;
+        }
 
         var quality = options.TryGetValue("original_quality", out var selected)
             && selected is bool enabled && enabled;
@@ -136,6 +141,9 @@ public sealed partial class DouyinSiteProvider : ISiteProvider
             [Id] = douyinOptions,
             ["base-directory"] = target.BaseDirectory ?? "",
         };
+        // 短链展开后仍需校验类型，单条下载不能意外拉取整位作者的作品。
+        if (kind == ContentKind.Permalink)
+            douyinOptions["target_kind"] = "work";
         return new DownloadPlan(Id, [url], target.BaseDirectory ?? "", nested);
     }
 }

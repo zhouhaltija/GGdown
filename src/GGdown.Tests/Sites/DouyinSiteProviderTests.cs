@@ -78,6 +78,32 @@ public class DouyinSiteProviderTests
     }
 
     [Fact]
+    public void Shared_video_text_creates_work_only_plan()
+    {
+        var input = "0.71 o@q.eb 02/16 lcn:/ :5pm 天赋不会给你刀刻般的肌肉💪🐱 # 无敌小猫拳 # 哈基米  https://v.douyin.com/uJS3Tm5L5iI/ 复制此链接，打开Dou音搜索，直接观看视频！";
+        var parsed = _site.ParseInput(input);
+        Assert.True(parsed.Ok);
+        Assert.Equal(PasteKind.Work, parsed.Kind);
+        Assert.Equal("https://v.douyin.com/uJS3Tm5L5iI/", parsed.DirectUrl);
+
+        var plan = _site.BuildDownload(ContentKind.Permalink,
+            new UserTarget(null, null, "D:/downloads", DirectUrl: parsed.DirectUrl),
+            new Dictionary<string, object?> { ["earliest_date"] = "2026-10-06" },
+            new DownloadPaths("cookies.txt", "archive.txt"));
+        var options = (IReadOnlyDictionary<string, object?>)plan.Options["douyin"]!;
+        Assert.Equal("work", options["target_kind"]);
+        Assert.Equal("", options["earliest_date"]);
+    }
+
+    [Fact]
+    public void Permalink_plan_rejects_user_home()
+    {
+        Assert.Throws<ArgumentException>(() => _site.BuildDownload(ContentKind.Permalink,
+            new UserTarget(null, null, "D:/downloads", DirectUrl: "https://www.douyin.com/user/MS4wLjABtest"),
+            _site.DefaultOptions, new DownloadPaths("cookies.txt", "archive.txt")));
+    }
+
+    [Fact]
     public void User_plan_applies_content_selection_and_user_date_over_site_date()
     {
         var options = new Dictionary<string, object?> { ["earliest_date"] = "2024-01-01" };

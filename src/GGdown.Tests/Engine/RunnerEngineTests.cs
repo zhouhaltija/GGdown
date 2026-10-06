@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.Text.Json;
 using GGdown.Engine;
 using GGdown.Paths;
 using GGdown.Sites;
@@ -38,6 +39,30 @@ public class RunnerEngineTests : IDisposable
             catch { /* 未安装 */ }
         }
         return null;
+    }
+
+    [SkippableFact]
+    public async Task Download_passes_same_shared_rate_state_to_all_platforms()
+    {
+        var python = LocatePython();
+        Skip.If(python is null, "本机无 Python");
+        var capture = Path.Combine(_paths.TempDir, "captured.json");
+        var options = new Dictionary<string, object?> { ["capture_spec"] = capture, ["base-directory"] = _paths.Root };
+        var engine = new RunnerEngine(_paths,
+            new RunnerEngineOptions { PythonExe = python!, RunnerScript = Path.Combine(AppContext.BaseDirectory, "Fixtures", "stub_runner.py") },
+            NullLogger<RunnerEngine>.Instance, new FakeAppSettings());
+        foreach (var siteId in new[] { "twitter", "pixiv", "douyin" })
+        {
+            await engine.DownloadAsync(new DownloadPlan(siteId, ["https://example.com/video"], _paths.Root, options),
+                "fictional-cookie", new Progress<EngineEvent>());
+            using var doc = JsonDocument.Parse(await File.ReadAllTextAsync(capture));
+            var saved = doc.RootElement.GetProperty("options");
+            var config = saved.GetProperty("ggdown-rate-limit");
+            Assert.Equal(_paths.DbFile, config.GetProperty("settings-db").GetString());
+            Assert.Equal(Path.Combine(_paths.TempDir, "download-rate.db"), config.GetProperty("state-db").GetString());
+            Assert.Equal(_paths.Root, saved.GetProperty("base-directory").GetString());
+        }
+        Assert.False(options.ContainsKey("ggdown-rate-limit"));
     }
 
     [SkippableFact]

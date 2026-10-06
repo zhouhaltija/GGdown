@@ -46,6 +46,9 @@ public partial class GlobalSettingsViewModel : StatusViewModel
     [ObservableProperty]
     private double _concurrency;          // NumberBox 绑定，保存时取整钳制
 
+    [ObservableProperty]
+    private double _downloadRateLimitKiB;
+
     public IReadOnlyList<string> ProxySchemeChoices { get; } = ["http", "socks5", "socks5h"];
 
     [ObservableProperty]
@@ -84,6 +87,7 @@ public partial class GlobalSettingsViewModel : StatusViewModel
             var concurrency = await _settings.GetConcurrencyAsync();
             _queue.Concurrency = concurrency; // 裁定 4：启动时应用并发
             var directory = await _settings.GetDownloadDirectoryAsync();
+            var rateLimit = await _settings.GetDownloadRateLimitAsync();
             var proxy = await _settings.GetProxyAsync();
             var proxyUrl = proxy.ToUrl();
             var proxyScheme = proxyUrl is null ? "http"
@@ -96,6 +100,9 @@ public partial class GlobalSettingsViewModel : StatusViewModel
                 _loadingConcurrency = true; // 载入回填不算用户修改，不触发自动保存
                 Concurrency = concurrency;
                 _loadingConcurrency = false;
+                _loadingRateLimit = true;
+                DownloadRateLimitKiB = rateLimit / 1024.0;
+                _loadingRateLimit = false;
                 DownloadDirectory = directory;
                 ProxyScheme = proxyScheme;
                 ProxyHost = proxy.Host;
@@ -146,7 +153,33 @@ public partial class GlobalSettingsViewModel : StatusViewModel
     // —— 并发数改动即保存（通用页无「保存」按钮）——
 
     private bool _loadingConcurrency;
+    private bool _loadingRateLimit;
     private readonly SemaphoreSlim _saveGate = new(1, 1);
+
+    partial void OnDownloadRateLimitKiBChanged(double value)
+    {
+        if (_loadingRateLimit || !double.IsFinite(value)) return;
+        _ = SaveDownloadRateLimitAsync(value);
+    }
+
+    private static long RateLimitBytes(double value) =>
+        (long)Math.Round(Math.Clamp(value, 0, AppSettings.MaxDownloadRateLimit / 1024.0) * 1024);
+
+    private async Task SaveDownloadRateLimitAsync(double value)
+    {
+        await _saveGate.WaitAsync();
+        try
+        {
+            var bytes = RateLimitBytes(value);
+            await _settings.SetDownloadRateLimitAsync(bytes);
+            StatusMessage = bytes == 0 ? "已保存：下载不限速" : $"已保存：总下载限速 {bytes / 1024.0:0.##} KB/s";
+        }
+        catch (Exception ex)
+        {
+            StatusMessage = $"保存失败：{ex.Message}";
+        }
+        finally { _saveGate.Release(); }
+    }
 
     partial void OnConcurrencyChanged(double value)
     {
@@ -203,6 +236,8 @@ public partial class GlobalSettingsViewModel : StatusViewModel
             var n = Math.Max(1, (int)Math.Round(Concurrency)); // <1 钳制（裁定 4）
             await _settings.SetConcurrencyAsync(n);
             _queue.Concurrency = n; // 保存通用设置同步 setter（裁定 4）
+            if (double.IsFinite(DownloadRateLimitKiB))
+                await _settings.SetDownloadRateLimitAsync(RateLimitBytes(DownloadRateLimitKiB));
             if (!string.IsNullOrWhiteSpace(DownloadDirectory))
                 await _settings.SetDownloadDirectoryAsync(DownloadDirectory);
             await _settings.SetProxyAsync(new ProxyConfig(
