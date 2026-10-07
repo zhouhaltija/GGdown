@@ -117,14 +117,15 @@ public partial class App : Application
                 try { await Services.GetRequiredService<ICurrentSite>().LoadAsync(); }
                 catch (Exception ex) { Log.Error(ex, "加载当前站点失败"); }
                 _globalReadyTcs.TrySetResult(); // 侧栏可显示
-                await scope.ServiceProvider.GetRequiredService<StatsAggregator>()
-                    .RecalculateDownloadCountsAsync();
                 // Global Constraint：启动即应用保存的并发数（此前仅设置页应用，未访问设置页不生效）
                 var queue = scope.ServiceProvider.GetRequiredService<IDownloadQueueService>();
                 queue.Concurrency = await scope.ServiceProvider.GetRequiredService<IAppSettings>()
                     .GetConcurrencyAsync();
                 await scope.ServiceProvider.GetRequiredService<IDownloadQueueService>()
                     .RecoverOnStartupAsync();
+                // 先恢复中断任务，再用最终状态同步重建次数和末次下载时间。
+                await scope.ServiceProvider.GetRequiredService<StatsAggregator>()
+                    .RecalculateDownloadCountsAsync();
             }
             catch (Exception ex) { Log.Error(ex, "启动恢复失败"); }
             finally
