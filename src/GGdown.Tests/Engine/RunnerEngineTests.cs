@@ -160,11 +160,29 @@ public class RunnerEngineTests : IDisposable
     {
         var python = LocatePython();
         Skip.If(python is null, "本机无 Python");
+        var readyFile = Path.Combine(_paths.TempDir, "runner-ready.txt");
         var plan = new DownloadPlan("twitter", ["https://x.com/alice/media"],
-            _paths.Root, new Dictionary<string, object?> { ["hang"] = true });
-        using var cts = new CancellationTokenSource(1000);
-        await Assert.ThrowsAnyAsync<OperationCanceledException>(() =>
-            CreateEngine(python!).DownloadAsync(plan, "good.txt",
-                new Progress<EngineEvent>(), cts.Token));
+            _paths.Root, new Dictionary<string, object?> { ["hang"] = true, ["ready_file"] = readyFile });
+        using var cts = new CancellationTokenSource();
+        var download = CreateEngine(python!).DownloadAsync(plan, "good.txt", new Progress<EngineEvent>(), cts.Token);
+        try
+        {
+            var timeout = Stopwatch.StartNew();
+            while (!File.Exists(readyFile) && timeout.Elapsed < TimeSpan.FromSeconds(10))
+                await Task.Delay(20);
+            Assert.True(File.Exists(readyFile), "测试引擎未就绪");
+            var processId = int.Parse(await File.ReadAllTextAsync(readyFile));
+            using var child = Process.GetProcessById(processId);
+            _ = child.Handle; // 先取得句柄，退出检查不会受 PID 回收或复用影响。
+            cts.Cancel();
+            await Assert.ThrowsAnyAsync<OperationCanceledException>(() => download);
+            Assert.True(child.HasExited, "取消返回后 Python 进程仍占用工作目录");
+        }
+        finally
+        {
+            cts.Cancel();
+            try { await download; }
+            catch (OperationCanceledException) { }
+        }
     }
 }

@@ -162,7 +162,7 @@ public sealed class RunnerEngine(
         if (pythonIsPath && !File.Exists(options.PythonExe))
             throw new EngineException($"引擎未安装：找不到 {options.PythonExe}（首次启动会从安装目录播种 engine）");
 
-        var p = new Process { StartInfo = psi };
+        using var p = new Process { StartInfo = psi };
         p.Start();
 
         var stderrTask = p.StandardError.ReadToEndAsync(ct);
@@ -192,6 +192,13 @@ public sealed class RunnerEngine(
         catch (OperationCanceledException)
         {
             TryKill(p);
+            // Kill 发出终止请求后并不等待退出，取消完成前应确认工作目录和流均已释放。
+            try { await p.WaitForExitAsync(CancellationToken.None).WaitAsync(TimeSpan.FromSeconds(5)); }
+            catch (TimeoutException ex) { log.LogWarning(ex, "取消后 runner 未在 5 秒内退出"); }
+            try { await Task.WhenAll(stdoutTask, stderrTask).WaitAsync(TimeSpan.FromSeconds(5)); }
+            catch (OperationCanceledException) { }
+            catch (IOException) { } // 进程被终止时，管道可能已经关闭。
+            catch (TimeoutException ex) { log.LogWarning(ex, "取消后 runner 输出流未在 5 秒内关闭"); }
             throw;
         }
 
@@ -199,7 +206,6 @@ public sealed class RunnerEngine(
         var tail = stderr.Length > 2000 ? stderr[^2000..] : stderr;
         var exitCode = p.ExitCode;
         log.LogDebug("runner 退出：退出码 {ExitCode}", exitCode);
-        TryDispose(p);
 
         if (killOnCancel && ct.IsCancellationRequested)
             throw new OperationCanceledException(ct);
@@ -210,13 +216,15 @@ public sealed class RunnerEngine(
         return new RunnerResult(exitCode, tail);
     }
 
-    private static void TryKill(Process p)
+    private void TryKill(Process p)
     {
-        try { if (!p.HasExited) p.Kill(entireProcessTree: true); } catch { /* 已退出 */ }
+        try { if (!p.HasExited) p.Kill(entireProcessTree: true); }
+        catch (Exception ex)
+        {
+            log.LogWarning(ex, "终止 runner 进程树失败，尝试终止主进程");
+            try { if (!p.HasExited) p.Kill(); }
+            catch (Exception fallbackEx) { log.LogWarning(fallbackEx, "终止 runner 主进程失败"); }
+        }
     }
 
-    private static void TryDispose(Process p)
-    {
-        try { p.Dispose(); } catch { }
-    }
 }

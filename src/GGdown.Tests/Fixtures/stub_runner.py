@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """测试桩：按 runner 协议输出事件。"""
 import json
+import os
 import sys
 import time
 
@@ -55,6 +56,11 @@ def main():
         if opts.get("crash"):
             sys.exit(3)  # 审查 Important-1：不发 fatal 直接非零退出，模拟 runner 被杀
         if opts.get("hang"):
+            if opts.get("ready_file"):
+                ready_tmp = opts["ready_file"] + ".tmp"
+                with open(ready_tmp, "w", encoding="utf-8") as f:
+                    f.write(str(os.getpid()))
+                os.replace(ready_tmp, opts["ready_file"])
             time.sleep(60)
         for url in spec["urls"]:
             emit("url-start", url=url)

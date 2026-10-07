@@ -8,7 +8,8 @@ using GGdown.Threading;
 using GGdown.ViewModels;
 using Microsoft.Data.Sqlite; // 补 using：SqliteConnection 在 tuple 类型中未限定（同 UsersViewModelTests，brief 未列）
 using Microsoft.EntityFrameworkCore; // 补 using：测试体用了 ExecuteDeleteAsync/AsNoTracking（同 UsersViewModelTests）
-using Microsoft.Extensions.Logging.Abstractions;
+using Microsoft.Extensions.Logging;
+using System.Collections.Concurrent;
 
 namespace GGdown.Tests.ViewModels;
 
@@ -16,7 +17,7 @@ namespace GGdown.Tests.ViewModels;
 /// B5：下载页 VM 测试。队列用真 DownloadQueueService + FakeEngine（brief Step 1），
 /// 测事件驱动的卡片生命周期：入队卡片出现（Title/KindBadge）、file-done 后 ProgressText、
 /// 终态后卡片移除 + HasActive=false、取消路径、无账号拦截。
-/// 组装同 UsersViewModelTests 模式（TestDb/SingleDbContextFactory/TestPaths/SiteRegistry + SyncDispatcher）。
+/// 平台数据库使用 WAL 文件库和独立连接，模拟账号查询与后台下载的并发。
 /// </summary>
 public class DownloadsViewModelTests : IDisposable
 {
@@ -30,14 +31,72 @@ public class DownloadsViewModelTests : IDisposable
     private readonly FakeCurrentSite _site = new();
     private readonly Account _account;
     private readonly User _alice;
-    private readonly SingleDbContextFactory _factory;
+    private readonly IsolatedSiteDbContextFactory _siteFactory;
+    private readonly List<DownloadQueueService> _queues = [];
+    private readonly List<DownloadsViewModel> _viewModels = [];
+    private readonly List<TaskCompletionSource> _engineGates = [];
     private readonly AppSettings _settings;
+    private readonly QueueLogger _queueLog = new();
+
+    [Fact]
+    public void Database_uses_production_WAL_mode_for_concurrent_readers_and_writers()
+    {
+        using var command = _t.Item1.CreateCommand();
+        command.CommandText = "PRAGMA journal_mode";
+        Assert.Equal("wal", command.ExecuteScalar());
+    }
+
+    [Fact]
+    public async Task Account_query_is_isolated_from_another_contexts_uncommitted_changes()
+    {
+        var factory = _siteFactory;
+        await using var writer = await factory.CreateAsync("twitter");
+        await using var transaction = await writer.Database.BeginTransactionAsync();
+        var account = await writer.Accounts.SingleAsync(a => a.Id == _account.Id);
+        account.IsActive = false;
+        await writer.SaveChangesAsync();
+
+        var active = await new AccountQueryService(factory).GetActiveAsync("twitter");
+        Assert.NotNull(active);
+        Assert.Equal(_account.Id, active.Id);
+    }
+
+    [Fact]
+    public async Task Fixture_cleanup_releases_waiting_downloads_and_database_files()
+    {
+        var fixture = new DownloadsViewModelTests();
+        try
+        {
+            var gate = fixture.CreateGate();
+            fixture._engine.OnDownload = async (_, _, _, _) => await gate.Task;
+            await fixture._queue.EnqueueUserMediaAsync(fixture._account, [fixture._alice], @"D:\dl", Opts());
+        }
+        finally
+        {
+            // 模拟测试主体提前结束，没有走到释放 gate 的正常路径。
+            fixture.Dispose();
+        }
+        Assert.Empty(fixture._queue.Active);
+        Assert.False(Directory.Exists(fixture._paths.Root));
+    }
 
     public DownloadsViewModelTests()
     {
-        _t = TestDb.CreateSite();
+        var connectionString = new SqliteConnectionStringBuilder
+        {
+            DataSource = Path.Combine(_paths.Root, "downloads-tests.db"),
+            Pooling = false,
+        }.ToString();
+        var connection = new SqliteConnection(connectionString);
+        connection.Open();
+        var db = new GGdownSiteDbContext(new DbContextOptionsBuilder<GGdownSiteDbContext>()
+            .UseSqlite(connection).Options);
+        db.Database.EnsureCreated();
+        // 外部已打开的连接不会由 EnsureCreated 自动启用 WAL；与生产工厂保持一致。
+        db.Database.ExecuteSqlRaw("PRAGMA journal_mode=WAL;");
+        _t = (connection, db);
         _db = _t.Item2;
-        _factory = new SingleDbContextFactory(_db);
+        _siteFactory = new IsolatedSiteDbContextFactory(connectionString);
         _account = new Account
         { SiteId = "twitter", CookiePath = "c", Status = AccountStatus.Ok, IsActive = true, AddedAt = DateTime.UtcNow };
         _alice = new User
@@ -47,21 +106,54 @@ public class DownloadsViewModelTests : IDisposable
         _db.SaveChanges();
         var sites = new SiteRegistry([new TwitterSiteProvider()]);
         _settings = new AppSettings(new SingleGlobalDbContextFactory(_global.Item2), sites, new SiteDbContextFactory(_paths));
-        _queue = new DownloadQueueService(new SingleSiteDbContextFactory(_db), _engine, new FakeStats(), _paths, sites,
-            NullLogger<DownloadQueueService>.Instance);
+        _queue = CreateQueue(sites);
         _vm = CreateVm(_site);
         _vm.Start(); // 页面 OnNavigatedTo 的等价调用：订阅 + 播种 + HasAccount 刷新
     }
 
     private DownloadsViewModel CreateVm(ICurrentSite site) =>
-        new(_queue, new AccountQueryService(new SingleSiteDbContextFactory(_db)), new AppSettings(new SingleGlobalDbContextFactory(_global.Item2), new SiteRegistry([new TwitterSiteProvider()]), new SiteDbContextFactory(_paths)),
-            new SyncDispatcher(), site, new SiteRegistry([new TwitterSiteProvider()]));
+        TrackVm(new(_queue, new AccountQueryService(_siteFactory), new AppSettings(new SingleGlobalDbContextFactory(_global.Item2), new SiteRegistry([new TwitterSiteProvider()]), new SiteDbContextFactory(_paths)),
+            new SyncDispatcher(), site, new SiteRegistry([new TwitterSiteProvider()])));
+
+    private DownloadsViewModel TrackVm(DownloadsViewModel vm)
+    {
+        _viewModels.Add(vm);
+        return vm;
+    }
+
+    private TaskCompletionSource CreateGate()
+    {
+        var gate = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        _engineGates.Add(gate);
+        return gate;
+    }
+
+    private DownloadQueueService CreateQueue(SiteRegistry sites)
+    {
+        var queue = new DownloadQueueService(_siteFactory, _engine, new FakeStats(), _paths, sites,
+            _queueLog);
+        _queues.Add(queue);
+        return queue;
+    }
 
     public void Dispose()
     {
-        _t.Item1.Dispose();
-        _global.Item1.Dispose();
-        if (Directory.Exists(_paths.Root)) Directory.Delete(_paths.Root, true);
+        try
+        {
+            foreach (var gate in _engineGates) gate.TrySetResult();
+            foreach (var vm in _viewModels) vm.Stop();
+            // 断言失败也释放挂起的引擎；后台退出 await using 后再删除数据库。
+            Assert.True(SpinWait.SpinUntil(() => _queues.All(q => q.Active.Count == 0)
+                && !_siteFactory.HasOpenConnections, TimeSpan.FromSeconds(5)), "测试结束时仍有下载任务或数据库连接未释放");
+        }
+        finally
+        {
+            _db.Dispose();
+            _t.Item1.Dispose();
+            _global.Item2.Dispose();
+            _global.Item1.Dispose();
+            if (Directory.Exists(_paths.Root)) Directory.Delete(_paths.Root, true);
+        }
     }
 
     private static IReadOnlyDictionary<string, object?> Opts() => new Dictionary<string, object?> { ["videos"] = true };
@@ -70,10 +162,11 @@ public class DownloadsViewModelTests : IDisposable
     [Fact]
     public async Task Enqueue_creates_cards_with_title_and_kind_badge()
     {
-        var gate = new TaskCompletionSource();
+        var gate = CreateGate();
         _engine.OnDownload = async (_, _, _, _) => await gate.Task; // 首任务（FIFO=用户媒体）挂起，保持 3 卡片活跃
 
-        await WaitUntil(() => _vm.HasAccount); // Start() 的异步 HasAccount 刷新
+        await WaitUntil(() => _vm.HasAccount || _vm.StatusMessage is not null);
+        Assert.True(_vm.HasAccount, _vm.StatusMessage); // 账号查询失败时直接报告原因，避免只看到等待超时。
         await _queue.EnqueueUserMediaAsync(_account, [_alice], @"D:\dl", Opts());
         await _vm.DownloadLikesCommand.ExecuteAsync(null);
         await _vm.DownloadBookmarksCommand.ExecuteAsync(null);
@@ -98,7 +191,7 @@ public class DownloadsViewModelTests : IDisposable
     public async Task FileDone_updates_progress_text_and_current_file()
     {
         var reported = new TaskCompletionSource();
-        var release = new TaskCompletionSource();
+        var release = CreateGate();
         _engine.OnDownload = async (_, _, progress, _) =>
         {
             progress.Report(new EngineEvent("url-start", Url: "https://x.com/alice/media"));
@@ -185,7 +278,7 @@ public class DownloadsViewModelTests : IDisposable
     [Fact]
     public async Task Cancel_from_card_removes_card_and_cancels_job()
     {
-        var gate = new TaskCompletionSource();
+        var gate = CreateGate();
         _engine.OnDownload = async (plan, cookies, progress, ct) =>
         {
             progress.Report(new EngineEvent("file-start", Path: "D:/x/1.jpg", ItemId: "1"));
@@ -228,7 +321,7 @@ public class DownloadsViewModelTests : IDisposable
         var vm = CreateVm(site);
         vm.Start();
 
-        var gate = new TaskCompletionSource();
+        var gate = CreateGate();
         _engine.OnDownload = async (_, _, _, _) => await gate.Task;
 
         await _queue.EnqueueUserMediaAsync(_account, [_alice], @"D:\dl", Opts());
@@ -252,7 +345,7 @@ public class DownloadsViewModelTests : IDisposable
     [Fact]
     public async Task Start_prunes_ghost_cards_from_missed_removals_during_stop()
     {
-        var gate = new TaskCompletionSource();
+        var gate = CreateGate();
         _engine.OnDownload = async (_, _, _, _) => await gate.Task;
 
         var jobId = await _queue.EnqueueUserMediaAsync(_account, [_alice], @"D:\dl", Opts());
@@ -275,7 +368,7 @@ public class DownloadsViewModelTests : IDisposable
     [Fact]
     public async Task Search_enqueues_permalink_job()
     {
-        var gate = new TaskCompletionSource();
+        var gate = CreateGate();
         _engine.OnDownload = async (_, _, _, ct) => await gate.Task.WaitAsync(ct);
         await WaitUntil(() => _vm.HasAccount);
         Assert.True(_vm.SupportsSearch);
@@ -298,14 +391,13 @@ public class DownloadsViewModelTests : IDisposable
         _db.Accounts.Add(douyin);
         await _db.SaveChangesAsync();
         var sites = new SiteRegistry([new TwitterSiteProvider(), new DouyinSiteProvider()]);
-        var queue = new DownloadQueueService(new SingleSiteDbContextFactory(_db), _engine, new FakeStats(), _paths,
-            sites, NullLogger<DownloadQueueService>.Instance);
+        var queue = CreateQueue(sites);
         var site = new FakeCurrentSite();
         await site.SelectAsync("douyin");
-        var vm = new DownloadsViewModel(queue, new AccountQueryService(new SingleSiteDbContextFactory(_db)),
+        var vm = TrackVm(new DownloadsViewModel(queue, new AccountQueryService(_siteFactory),
             new AppSettings(new SingleGlobalDbContextFactory(_global.Item2), sites, new SiteDbContextFactory(_paths)),
-            new SyncDispatcher(), site, sites);
-        var gate = new TaskCompletionSource();
+            new SyncDispatcher(), site, sites));
+        var gate = CreateGate();
         var planReady = new TaskCompletionSource<DownloadPlan>(TaskCreationOptions.RunContinuationsAsynchronously);
         _engine.OnDownload = async (plan, _, progress, ct) =>
         {
@@ -323,7 +415,7 @@ public class DownloadsViewModelTests : IDisposable
         try
         {
             var plan = await planReady.Task.WaitAsync(TimeSpan.FromSeconds(15));
-            // 后台任务暂停在引擎后再查询，避免多个上下文并发读取同一内存 SQLite 连接。
+            // 引擎就绪后查询，确保后台任务已进入下载阶段。
             var job = Assert.Single(_db.Jobs.Where(j => j.SiteId == "douyin"));
             Assert.Equal(TargetKind.Permalink, job.TargetKind);
             Assert.Null(job.UserId);
@@ -343,8 +435,8 @@ public class DownloadsViewModelTests : IDisposable
         var sites = new SiteRegistry([new TwitterSiteProvider(), new DouyinSiteProvider()]);
         var site = new FakeCurrentSite();
         await site.SelectAsync("douyin");
-        var vm = new DownloadsViewModel(_queue, new AccountQueryService(new SingleSiteDbContextFactory(_db)),
-            _settings, new SyncDispatcher(), site, sites);
+        var vm = TrackVm(new DownloadsViewModel(_queue, new AccountQueryService(_siteFactory),
+            _settings, new SyncDispatcher(), site, sites));
 
         vm.PermalinkInput = "https://www.douyin.com/user/MS4wLjABtest";
         await vm.DownloadPermalinkCommand.ExecuteAsync(null);
@@ -353,16 +445,25 @@ public class DownloadsViewModelTests : IDisposable
         Assert.Empty(_db.Jobs.Where(j => j.SiteId == "douyin"));
     }
 
-    // 修复波 B5 flaky 处置：隔离复跑 3/3 通过、全量负载下偶发 5s 超时（累计 3 次）——负载敏感而非回归，
-    // 按最终审查建议把默认 timeoutMs 5000→15000（纯测试参数，断言不变）
-    private static async Task WaitUntil(Func<bool> cond, int timeoutMs = 15000)
+    // 超时同时报告后台任务状态和异常，避免并发故障只留下等待超时。
+    private async Task WaitUntil(Func<bool> cond, int timeoutMs = 15000)
     {
         var start = Environment.TickCount;
         while (!cond())
         {
-            if (Environment.TickCount - start > timeoutMs) throw new TimeoutException("条件等待超时");
+            if (Environment.TickCount - start > timeoutMs)
+                throw new TimeoutException($"条件等待超时；活动任务：{string.Join(", ", _queues.SelectMany(q => q.Active))}；引擎调用：{_engine.Downloads.Count}；日志：{string.Join(Environment.NewLine, _queueLog.Messages)}");
             await Task.Delay(20);
         }
+    }
+
+    private sealed class QueueLogger : ILogger<DownloadQueueService>
+    {
+        public ConcurrentQueue<string> Messages { get; } = new();
+        public IDisposable? BeginScope<TState>(TState state) where TState : notnull => null;
+        public bool IsEnabled(LogLevel logLevel) => true;
+        public void Log<TState>(LogLevel logLevel, EventId eventId, TState state, Exception? exception,
+            Func<TState, Exception?, string> formatter) => Messages.Enqueue($"{formatter(state, exception)} {exception}");
     }
 
     // ---- Task 10：全局下载视图（栏底入口）——平台模式只见本站，全局模式全见 ----
@@ -379,14 +480,13 @@ public class DownloadsViewModelTests : IDisposable
         await _db.SaveChangesAsync();
 
         var sites = new SiteRegistry([new TwitterSiteProvider(), new PixivSiteProvider()]);
-        var queue = new DownloadQueueService(new SingleSiteDbContextFactory(_db), _engine, new FakeStats(), _paths,
-            sites, NullLogger<DownloadQueueService>.Instance);
-        var vm = new DownloadsViewModel(queue, new AccountQueryService(new SingleSiteDbContextFactory(_db)),
-            _settings, new SyncDispatcher(), new FakeCurrentSite(), sites);
+        var queue = CreateQueue(sites);
+        var vm = TrackVm(new DownloadsViewModel(queue, new AccountQueryService(_siteFactory),
+            _settings, new SyncDispatcher(), new FakeCurrentSite(), sites));
         vm.Start();
         await WaitUntil(() => vm.HasAccount);
 
-        var gate = new TaskCompletionSource();
+        var gate = CreateGate();
         _engine.OnDownload = async (_, _, _, _) => await gate.Task; // 挂起保持卡片活跃
         await queue.EnqueueUserMediaAsync(pixivAccount, [pixivUser], @"D:\dl", new Dictionary<string, object?>());
         await WaitUntil(() => queue.Active.Count == 1);
