@@ -14,8 +14,8 @@ public class StatsAggregator(ISiteDbContextFactory siteFactory)
         await using var db = await siteFactory.CreateAsync(siteId, ct);
         var job = await db.Jobs.AsNoTracking().SingleOrDefaultAsync(j => j.Id == jobId, ct);
         if (job?.UserId is not long userId) return;
-        if (job.Status != JobStatus.Completed && (job.Status != JobStatus.Failed
-            || (job.StartedAt is null && job.FinishedAt is null))) return;
+        // 下载次数、末次下载时间和作品数快照只记录成功完成的任务。
+        if (job.Status != JobStatus.Completed) return;
 
         var now = DateTime.UtcNow;
         var lastDownloadAt = job.FinishedAt ?? job.StartedAt ?? job.CreatedAt;
@@ -33,10 +33,9 @@ public class StatsAggregator(ISiteDbContextFactory siteFactory)
         foreach (var siteId in siteFactory.ExistingSites())
         {
             await using var db = await siteFactory.CreateAsync(siteId, ct);
-            // 恢复时未开始的排队任务也会标为 Failed，不能据此产生下载次数。
+            // 与实时更新使用相同口径，同时清除旧版本误计的失败任务。
             var counts = await db.Jobs.AsNoTracking()
-                .Where(j => j.UserId != null && (j.Status == JobStatus.Completed
-                    || (j.Status == JobStatus.Failed && (j.StartedAt != null || j.FinishedAt != null))))
+                .Where(j => j.UserId != null && j.Status == JobStatus.Completed)
                 .GroupBy(j => j.UserId!.Value)
                 .Select(g => new { UserId = g.Key, Count = (long)g.Count(),
                     LastDownloadAt = g.Max(j => j.FinishedAt ?? j.StartedAt ?? j.CreatedAt) })

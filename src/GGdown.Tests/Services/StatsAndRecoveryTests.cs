@@ -129,7 +129,7 @@ public class StatsAndRecoveryTests : IDisposable
     // ---- Task 4 新增：跨库隔离 ----
 
     [Fact]
-    public async Task Recalculate_restores_latest_attempt_date_and_excludes_unstarted_recovery_jobs()
+    public async Task Recalculate_restores_latest_success_date_and_excludes_failed_and_canceled_jobs()
     {
         var completedAt = new DateTime(2026, 9, 27, 10, 0, 0, DateTimeKind.Utc);
         var interruptedAt = new DateTime(2026, 9, 28, 10, 0, 0, DateTimeKind.Utc);
@@ -155,8 +155,8 @@ public class StatsAndRecoveryTests : IDisposable
 
         await using var result = await Twitter();
         var user = await result.Users.AsNoTracking().SingleAsync(u => u.Id == _alice.Id);
-        Assert.Equal(2, user.DownloadCount);
-        Assert.Equal(interruptedAt, user.LastDownloadAt);
+        Assert.Equal(1, user.DownloadCount);
+        Assert.Equal(completedAt, user.LastDownloadAt);
     }
 
     [Theory]
@@ -201,13 +201,20 @@ public class StatsAndRecoveryTests : IDisposable
         Assert.Equal(finishedAt, user.LastDownloadAt);
     }
 
-    [Fact]
-    public async Task Apply_ignores_failed_jobs_that_never_started()
+    [Theory]
+    [InlineData(JobStatus.Failed, false)]
+    [InlineData(JobStatus.Failed, true)]
+    [InlineData(JobStatus.Canceled, true)]
+    [InlineData(JobStatus.Pending, false)]
+    [InlineData(JobStatus.Running, true)]
+    public async Task Apply_ignores_unsuccessful_jobs(JobStatus status, bool started)
     {
         await using (var db = await Twitter())
         {
             var job = await db.Jobs.SingleAsync(j => j.Id == _job.Id);
-            job.Status = JobStatus.Failed;
+            job.Status = status;
+            job.StartedAt = started ? DateTime.UtcNow.AddMinutes(-1) : null;
+            job.FinishedAt = started ? DateTime.UtcNow : null;
             await db.SaveChangesAsync();
         }
         await new StatsAggregator(_factory).ApplyJobCompletionAsync(_job.Id, "twitter");
@@ -215,6 +222,31 @@ public class StatsAndRecoveryTests : IDisposable
         var user = await result.Users.AsNoTracking().SingleAsync(u => u.Id == _alice.Id);
         Assert.Equal(0, user.DownloadCount);
         Assert.Null(user.LastDownloadAt);
+    }
+
+    [Theory]
+    [InlineData(JobStatus.Failed)]
+    [InlineData(JobStatus.Canceled)]
+    public async Task Recalculate_clears_stale_statistics_when_only_unsuccessful_jobs_exist(JobStatus status)
+    {
+        await using (var db = await Twitter())
+        {
+            var job = await db.Jobs.SingleAsync(j => j.Id == _job.Id);
+            job.Status = status;
+            job.StartedAt = DateTime.UtcNow.AddMinutes(-1);
+            job.FinishedAt = DateTime.UtcNow;
+            var user = await db.Users.SingleAsync(u => u.Id == _alice.Id);
+            user.DownloadCount = 2;
+            user.LastDownloadAt = job.FinishedAt;
+            await db.SaveChangesAsync();
+        }
+
+        await new StatsAggregator(_factory).RecalculateDownloadCountsAsync();
+
+        await using var result = await Twitter();
+        var actual = await result.Users.AsNoTracking().SingleAsync(u => u.Id == _alice.Id);
+        Assert.Equal(0, actual.DownloadCount);
+        Assert.Null(actual.LastDownloadAt);
     }
 
     [Fact]

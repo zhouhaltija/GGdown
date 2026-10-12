@@ -304,8 +304,7 @@ public class DownloadQueueServiceTests : IDisposable
     [Fact]
     public async Task Engine_failure_still_aggregates_stats()
     {
-        // 审查 Important-4 回归覆盖（控制器裁定：终态一律聚合）：非 auth 引擎失败、已有 file-done 落库，
-        // 任务 Failed 后统计聚合仍须执行，否则 DownloadCount 永久少计
+        // 终态交给统计服务筛选；失败任务已经落库的文件记录仍须保留。
         _engine.OnDownload = (plan, cookies, progress, _) =>
         {
             progress.Report(new EngineEvent("file-done", Path: "D:/x/1_a_1.jpg", Size: 100));
@@ -318,6 +317,47 @@ public class DownloadQueueServiceTests : IDisposable
         var job = await _db.Jobs.AsNoTracking().SingleAsync();
         Assert.Equal(JobStatus.Failed, job.Status);
         Assert.Contains(jobId, _stats.AppliedJobIds);
+    }
+
+    [Theory]
+    [InlineData(false, 0)]
+    [InlineData(false, 1)]
+    [InlineData(true, 0)]
+    [InlineData(true, 1)]
+    public async Task Download_statistics_change_only_after_success(bool succeeds, int downloadedFiles)
+    {
+        var previousDownloadAt = new DateTime(2026, 9, 27, 10, 0, 0, DateTimeKind.Utc);
+        _alice.DownloadCount = 2;
+        _alice.LastDownloadAt = previousDownloadAt;
+        _alice.MediaCountAtDownload = 100;
+        _alice.MediaCount = 200;
+        await _db.SaveChangesAsync();
+        _engine.OnDownload = (_, _, progress, _) =>
+        {
+            if (downloadedFiles > 0)
+                progress.Report(new EngineEvent("file-done", Path: "D:/x/1.jpg", Size: 100));
+            if (!succeeds)
+                throw new EngineException("ValueError: 未取得抖音发布作品");
+            if (downloadedFiles == 0)
+                progress.Report(new EngineEvent("file-skip", Path: "D:/x/1.jpg"));
+            progress.Report(new EngineEvent("job-done", Total: 1, Skipped: downloadedFiles == 0 ? 1 : 0, Failed: 0));
+            return Task.CompletedTask;
+        };
+        var factory = new SingleSiteDbContextFactory(_db, "twitter");
+        var queue = new DownloadQueueService(factory, _engine, new StatsAggregator(factory), _paths,
+            new SiteRegistry([new TwitterSiteProvider()]), NullLogger<DownloadQueueService>.Instance);
+
+        await queue.EnqueueUserMediaAsync(_account, [_alice], @"D:\dl", Opts());
+        await WaitUntil(() => queue.Active.Count == 0);
+
+        var job = await _db.Jobs.AsNoTracking().SingleAsync();
+        var user = await _db.Users.AsNoTracking().SingleAsync();
+        Assert.Equal(succeeds ? JobStatus.Completed : JobStatus.Failed, job.Status);
+        Assert.Equal(downloadedFiles, job.DoneFiles);
+        Assert.Equal(succeeds ? 3 : 2, user.DownloadCount);
+        Assert.Equal(succeeds ? job.FinishedAt : previousDownloadAt, user.LastDownloadAt);
+        Assert.Equal(succeeds ? 200 : 100, user.MediaCountAtDownload);
+        Assert.Equal(succeeds ? 1 : downloadedFiles, await _db.Files.CountAsync());
     }
 
     [Fact]

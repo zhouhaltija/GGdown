@@ -3,6 +3,7 @@ import asyncio
 import json
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from urllib.parse import parse_qs, urlsplit
 
 import pytest
 
@@ -53,6 +54,55 @@ def test_fetch_current_user_requires_identity_and_sends_cookie():
     assert session.calls[0][1]["headers"]["uifid"] == "sample-uifid"
     assert "user/profile/self" in session.calls[0][0]
     assert "a_bogus=" in session.calls[0][0]
+
+
+@pytest.mark.parametrize("operation,path", [
+    ("posts", "/aweme/v1/web/aweme/post/"),
+    ("detail", "/aweme/v1/web/aweme/detail/"),
+    ("user", "/aweme/v1/web/user/profile/other/"),
+])
+def test_client_signs_requests_with_cookie_identity_without_leaking_between_accounts(monkeypatch, operation, path):
+    from src.interface.template import API
+    import src.interface.template as template_module
+
+    async def no_wait():
+        pass
+
+    monkeypatch.setattr(template_module, "wait", no_wait)
+    original_params = dict(API.params)
+    item = {"aweme_id": "1234567890123456789"}
+
+    class Response(FakeResponse):
+        status_code = 200
+        url = "https://www.douyin.com/"
+
+    class Session(FakeSession):
+        async def get(self, url, **kwargs):
+            self.calls.append((url, kwargs))
+            return Response({"status_code": 0, "aweme_list": [item], "has_more": 0,
+                             "max_cursor": 0, "aweme_detail": item,
+                             "user": {"sec_uid": "MS4wLjABtest"}})
+
+    for cookie, expected_uifid, expected_token in [
+        ("sessionid=fictional; UIFID=first-uifid; msToken=first-token", "first-uifid", "first-token"),
+        ("sessionid=fictional; uifid=second-uifid; mstoken=second-token", "second-uifid", "second-token"),
+        ("sessionid=fictional", "", ""),
+    ]:
+        session = Session({})
+        client = DouyinClient(session, cookie)
+        identifier = "1234567890123456789" if operation == "detail" else "MS4wLjABtest"
+        result = asyncio.run(getattr(client, operation)(identifier))
+        assert result
+        url, kwargs = session.calls[0]
+        query = parse_qs(urlsplit(url).query, keep_blank_values=True)
+        assert urlsplit(url).path == path
+        assert query["uifid"] == [expected_uifid]
+        assert query["msToken"] == [expected_token]
+        assert "a_bogus" in query
+        if operation in {"posts", "detail"}:
+            assert bool(query.get("x-secsdk-web-signature")) == bool(expected_uifid)
+        assert kwargs["headers"]["Cookie"] == cookie
+    assert API.params == original_params
 
 
 def test_client_extracts_gallery_using_third_party_extractor():
@@ -288,6 +338,8 @@ def test_posts_fetches_all_pages_with_earliest_date(monkeypatch):
     calls = []
 
     class FakeAccount:
+        params = {}
+
         def __init__(self, params, **kwargs):
             calls.append(kwargs)
 

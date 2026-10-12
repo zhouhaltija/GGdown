@@ -278,7 +278,7 @@ public sealed class DownloadQueueService(
         // 落库的 SourceItemId 用事件自身 item_id，缺省回退到最近一次 file-start 的 item_id（测试即此语义）。
         string? currentItemId = null;
         // 审查 Important-2：文件落库不逐条 await（不回退事件吞吐），但每个 finish 路径在进入终态前必须
-        // 排干在途插入，否则 FinishJobAsync 的统计聚合可能读到缺行快照，用户 DownloadCount 永久少计。
+        // 排干在途插入，确保任务进入终态时文件历史已经完整落库。
         // InsertFileAsync 内部 try/catch 不抛，Task.WhenAll 安全。
         var pendingInserts = new List<Task>();
 
@@ -403,8 +403,7 @@ public sealed class DownloadQueueService(
         job.FinishedAt = DateTime.UtcNow;
         await db.SaveChangesAsync();
 
-        // 审查 Important-4（控制器裁定）：终态一律聚合。规格 §4.2 DownloadCount 定义不限定任务终态，
-        // 只排除 Failed 会让认证失效中断的文件永不计数（单向门：重下时 archive 命中只算 Skipped）
+        // 终态统一交给统计服务筛选，只有成功完成的任务更新用户下载统计。
         if (status is JobStatus.Completed or JobStatus.Canceled or JobStatus.Failed)
             await stats.ApplyJobCompletionAsync(item.JobId, item.SiteId);
 

@@ -204,6 +204,18 @@ class DouyinClient:
             download=True, original_quality=False,
         )
 
+    def _prepare_api(self, api):
+        from src.tools import cookie_str_to_dict
+
+        cookies = {key.lower(): value for key, value in cookie_str_to_dict(self.cookies).items()}
+        # 直接调用第三方接口绕过了其全局配置初始化，须显式补齐签名所需的身份参数。
+        # 每个请求持有独立参数，避免修改第三方类属性后串用其他账号的 Cookie。
+        api.params = dict(api.params) | {
+            "uifid": cookies.get("uifid", ""),
+            "msToken": cookies.get("mstoken", ""),
+        }
+        return api
+
     async def resolve(self, value: str) -> tuple[str, str]:
         kind, identifier = parse_target(value)
         if kind != "short":
@@ -216,7 +228,9 @@ class DouyinClient:
     async def user(self, identifier: str) -> dict:
         from src.interface.user import User
 
-        raw = await User(self.params, cookie=self.cookies, sec_user_id=identifier).run()
+        raw = await self._prepare_api(User(
+            self.params, cookie=self.cookies, sec_user_id=identifier,
+        )).run()
         if not isinstance(raw, dict) or not raw:
             raise ValueError("未取得抖音用户资料")
         return map_user(raw)
@@ -231,10 +245,10 @@ class DouyinClient:
             since = date.fromisoformat(earliest_date)
             page_since = since - timedelta(days=1) if since > date.min else since
             earliest_for_pages = f"{page_since.year:04d}/{page_since.month:02d}/{page_since.day:02d}"
-        raw, _, _ = await Account(
+        raw, _, _ = await self._prepare_api(Account(
             self.params, cookie=self.cookies, sec_user_id=identifier,
             tab="post", earliest=earliest_for_pages,
-        ).run()
+        )).run()
         if not isinstance(raw, list):
             raise ValueError("未取得抖音发布作品")
         if not raw:
@@ -244,7 +258,9 @@ class DouyinClient:
     async def detail(self, identifier: str) -> dict:
         from src.interface.detail import Detail
 
-        raw = await Detail(self.params, cookie=self.cookies, detail_id=identifier).run()
+        raw = await self._prepare_api(Detail(
+            self.params, cookie=self.cookies, detail_id=identifier,
+        )).run()
         if isinstance(raw, dict) and raw:
             return raw
         return await self._share_detail(identifier)
