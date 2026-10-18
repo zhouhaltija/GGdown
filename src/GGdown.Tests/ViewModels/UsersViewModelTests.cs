@@ -178,7 +178,7 @@ public class UsersViewModelTests : IDisposable
     [InlineData("site")]
     public async Task Delayed_next_page_cannot_append_after_query_changes(string change)
     {
-        _db.Users.AddRange(Enumerable.Range(10, 205).Select(i => NewUser(i.ToString(), $"user-{i}")));
+        _db.Users.AddRange(Enumerable.Range(10, 205).Select(i => NewUser(i.ToString(), $"user-{i}", count: i)));
         _db.Users.Add(new User { SiteId = "pixiv", RestId = "p1", ScreenName = "pixiv-only" });
         await _db.SaveChangesAsync();
         var query = new GatedPaginationQuery(new UserQueryService(new SingleSiteDbContextFactory(_db))) { DelayNextPage = true };
@@ -186,20 +186,39 @@ public class UsersViewModelTests : IDisposable
         await vm.RefreshCommand.ExecuteAsync(null);
         var loading = vm.LoadMoreCommand.ExecuteAsync(null);
         await query.NextPageStarted.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        var refreshed = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        void OnRefreshApplied(object? sender, System.ComponentModel.PropertyChangedEventArgs args)
+        {
+            // 查询开始不代表结果已应用；列表重建后才通知已加载数量。
+            if (args.PropertyName == nameof(UsersViewModel.UserCountText) && query.PageCalls >= 3)
+                refreshed.TrySetResult();
+        }
+        vm.PropertyChanged += OnRefreshApplied;
         try
         {
             if (change == "search") vm.SearchText = "alice";
             else if (change == "sort") vm.SortBy = "download_count";
             else await _site.SelectAsync("pixiv");
-            await WaitUntil(() => query.PageCalls >= 3);
-            var expected = vm.Users.Select(r => r.Model.Id).ToArray();
+            await refreshed.Task.WaitAsync(TimeSpan.FromSeconds(5));
+            // 插入顺序决定 Id：alice=1、bob=2、user-10..214=3..207、pixiv=208。
+            long[] expected = change switch
+            {
+                "search" => [1],
+                "sort" => Enumerable.Range(8, 200).Reverse().Select(id => (long)id).ToArray(),
+                _ => [208],
+            };
+            Assert.Equal(expected, vm.Users.Select(r => r.Model.Id));
             query.ReleaseNextPage.SetResult();
             await loading;
             Assert.Equal(expected, vm.Users.Select(r => r.Model.Id));
             Assert.Equal(change == "sort" ? 200 : 1, vm.Users.Count);
             if (change == "site") Assert.All(vm.Users, r => Assert.Equal("pixiv", r.SiteId));
         }
-        finally { query.ReleaseNextPage.TrySetResult(); }
+        finally
+        {
+            vm.PropertyChanged -= OnRefreshApplied;
+            query.ReleaseNextPage.TrySetResult();
+        }
     }
 
     private UsersViewModel CreatePaginationVm(IUserQueryService query, IDownloadQueueService queue)
