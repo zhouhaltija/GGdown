@@ -20,6 +20,7 @@ public sealed partial class PixivSiteProvider : ISiteProvider
     private static partial Regex IdRegex();
 
     public string SiteId => Id;
+    public UserDownloadFeatures UserFeatures => UserDownloadProfiles.Pixiv;
     public string DisplayName => "Pixiv";
     public bool RequiresRefreshToken => true;
     public string InputHint => "用户 ID 或主页链接，如 12345 或 https://www.pixiv.net/users/12345";

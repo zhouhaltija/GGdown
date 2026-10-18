@@ -460,6 +460,7 @@ async def _download_with_client(spec: dict, client, emit_event) -> None:
                 except Exception as error:
                     part.unlink(missing_ok=True)
                     failed += 1
-                    emit_event("log", level="error", msg=f"作品 {item_id} 的文件 {media['index']} 下载失败：{type(error).__name__}")
+                    emit_event("file-failed", path=str(target), item_id=item_id, kind="download",
+                               msg=f"作品 {item_id} 的文件 {media['index']} 下载失败：{type(error).__name__}")
 
     emit_event("job-done", total=done + skipped + failed, skipped=skipped, failed=failed)

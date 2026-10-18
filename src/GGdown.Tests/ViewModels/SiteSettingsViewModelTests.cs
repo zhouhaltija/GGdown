@@ -38,7 +38,7 @@ public class SiteSettingsViewModelTests : IDisposable
             Status = AccountStatus.Ok, IsActive = true, AddedAt = DateTime.UtcNow,
         });
         _db.SaveChanges();
-        _sites = new SiteRegistry([new TwitterSiteProvider()]);
+        _sites = new SiteRegistry([new TwitterSiteProvider(), new PixivSiteProvider()]);
         _settings = new AppSettings(new SingleGlobalDbContextFactory(_global.Item2), _sites,
             new SiteDbContextFactory(_paths));
         _vm = new SiteSettingsViewModel(_settings,
@@ -54,7 +54,100 @@ public class SiteSettingsViewModelTests : IDisposable
         if (Directory.Exists(_paths.Root)) Directory.Delete(_paths.Root, true);
     }
 
+    [Fact]
+    public async Task Queued_old_site_load_cannot_replace_new_site_account_or_schema()
+    {
+        var site = new FakeCurrentSite();
+        var dispatcher = new BufferedDispatcher();
+        var sites = new SiteRegistry([new TwitterSiteProvider(), new PixivSiteProvider()]);
+        var vm = new SiteSettingsViewModel(_settings,
+            new AccountService(new SingleSiteDbContextFactory(_db), _engine, _paths, sites, NullLogger<AccountService>.Instance),
+            new AccountQueryService(new SingleSiteDbContextFactory(_db)), sites, dispatcher, site);
+        await vm.StartAsync();
+        await site.SelectAsync("pixiv");
+        await vm.StartAsync();
+        dispatcher.DrainNewestFirst();
+        Assert.Null(vm.ActiveAccount);
+        Assert.DoesNotContain(vm.SiteOptions, o => o.Key == "videos");
+    }
+
+    [Fact]
+    public async Task Pending_auto_save_writes_original_site_after_switch()
+    {
+        var site = new FakeCurrentSite();
+        var sites = new SiteRegistry([new TwitterSiteProvider(), new PixivSiteProvider()]);
+        var vm = new SiteSettingsViewModel(_settings,
+            new AccountService(new SingleSiteDbContextFactory(_db), _engine, _paths, sites, NullLogger<AccountService>.Instance),
+            new AccountQueryService(new SingleSiteDbContextFactory(_db)), sites, new SyncDispatcher(), site)
+            { AutoSaveDelay = TimeSpan.FromMilliseconds(10) };
+        await vm.StartAsync();
+        vm.SiteOptions.Single(o => o.Key == "videos").BoolValue = false;
+        await site.SelectAsync("pixiv");
+        var deadline = DateTime.UtcNow.AddSeconds(3);
+        IReadOnlyDictionary<string, object?> saved;
+        do
+        {
+            await Task.Delay(20);
+            saved = await _settings.GetSiteOptionsAsync("twitter");
+        } while (!Equals(saved.GetValueOrDefault("videos"), false) && DateTime.UtcNow < deadline);
+        Assert.Equal(false, saved.GetValueOrDefault("videos"));
+        Assert.DoesNotContain("videos", (await _settings.GetSiteOptionsAsync("pixiv")).Keys);
+    }
+
+    private sealed class BufferedDispatcher : IUiDispatcher
+    {
+        private readonly List<Action> _actions = [];
+        public void Post(Action action) => _actions.Add(action);
+        public void DrainNewestFirst()
+        {
+            while (_actions.Count > 0)
+            {
+                var action = _actions[^1];
+                _actions.RemoveAt(_actions.Count - 1);
+                action();
+            }
+        }
+    }
+
     // ---- ⑥ 站点选项：Schema 初始化 OptionItemViewModel 集合 + 保存只含 Schema 键 ----
+
+    [Fact]
+    public async Task Shutdown_flush_returns_promptly_while_sqlite_writer_is_locked()
+    {
+        _vm.AutoSaveDelay = TimeSpan.FromSeconds(30);
+        await _vm.StartAsync();
+        _vm.SiteOptions.Single(o => o.Key == "videos").BoolValue = false;
+        await using var db = await new SiteDbContextFactory(_paths).CreateAsync("twitter");
+        await using var transaction = await db.Database.BeginTransactionAsync();
+        using var deadline = new CancellationTokenSource(TimeSpan.FromMilliseconds(100));
+        var returned = new TaskCompletionSource<Task>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var invocation = Task.Run(() => returned.TrySetResult(_vm.FlushPendingSavesAsync(deadline.Token)));
+        try
+        {
+            var flush = await returned.Task.WaitAsync(TimeSpan.FromSeconds(1));
+            await Assert.ThrowsAnyAsync<OperationCanceledException>(() => flush);
+        }
+        finally
+        {
+            await transaction.RollbackAsync();
+            await invocation;
+            await _vm.FlushPendingSavesAsync();
+        }
+    }
+
+    [Fact]
+    public async Task Reload_preserves_unsaved_edits_when_switching_back_to_a_site()
+    {
+        _vm.AutoSaveDelay = TimeSpan.FromSeconds(5);
+        await _vm.StartAsync();
+        _vm.SiteOptions.Single(o => o.Key == "videos").BoolValue = false;
+        await _vm.StartAsync();
+        var preserved = _vm.SiteOptions.Single(o => o.Key == "videos").BoolValue;
+        _vm.SiteOptions.Single(o => o.Key == "sleep").TextValue = "3";
+        await _vm.SaveOptionsCommand.ExecuteAsync(null);
+        Assert.False(preserved);
+        Assert.Equal(false, (await _settings.GetSiteOptionsAsync("twitter"))["videos"]);
+    }
 
     [Fact]
     public async Task Start_builds_twitter_options_from_schema_with_defaults()

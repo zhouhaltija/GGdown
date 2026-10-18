@@ -29,6 +29,7 @@ public interface ISiteProvider
     IReadOnlyDictionary<string, object?> DefaultOptions { get; }
     bool RequiresRefreshToken { get; }
     string InputHint { get; }
+    UserDownloadFeatures UserFeatures => UserDownloadFeatures.Basic;
     UserInputParseResult ParseInput(string input);
     string BuildProfileUrl(string screenName, string? restId = null);
     string KindLabel(ContentKind kind);

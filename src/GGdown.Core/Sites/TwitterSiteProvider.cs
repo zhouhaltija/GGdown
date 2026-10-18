@@ -5,6 +5,7 @@ namespace GGdown.Sites;
 public sealed partial class TwitterSiteProvider : ISiteProvider
 {
     public const string Id = "twitter";
+    public UserDownloadFeatures UserFeatures => UserDownloadProfiles.Twitter;
 
     private static readonly HashSet<string> Reserved = new(StringComparer.OrdinalIgnoreCase)
     {

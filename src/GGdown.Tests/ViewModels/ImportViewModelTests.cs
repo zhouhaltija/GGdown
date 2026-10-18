@@ -49,6 +49,37 @@ public class ImportViewModelTests : IDisposable
     }
 
     [Fact]
+    public async Task AddUser_uses_input_and_provider_captured_before_account_lookup()
+    {
+        var site = new FakeCurrentSite();
+        var sites = new SiteRegistry([new TwitterSiteProvider(), new PixivSiteProvider()]);
+        var factory = new SingleSiteDbContextFactory(_db);
+        var pending = new TaskCompletionSource<Account?>();
+        var vm = new ImportViewModel(
+            new AccountService(factory, _engine, _paths, sites, NullLogger<AccountService>.Instance),
+            new UserService(factory, _engine, _paths, sites, NullLogger<UserService>.Instance),
+            new DelayedAccountQuery(pending.Task),
+            new DownloadQueueService(factory, _engine, new FakeStats(), _paths, sites, NullLogger<DownloadQueueService>.Instance),
+            new FakeAppSettings(), new SyncDispatcher(), sites, site);
+        var imported = 0;
+        vm.ImportCompleted += () => imported++;
+        vm.UserInput = "alice";
+        var adding = vm.AddUserAsync();
+        await site.SelectAsync("pixiv");
+        vm.UserInput = "999";
+        pending.SetResult(await _db.Accounts.SingleAsync());
+        Assert.True(await adding);
+        Assert.Equal("alice", _engine.LastUserInfoInput);
+        Assert.Equal("twitter", _engine.LastSiteId);
+        Assert.Equal(0, imported);
+    }
+
+    private sealed class DelayedAccountQuery(Task<Account?> pending) : IAccountQueryService
+    {
+        public Task<Account?> GetActiveAsync(string siteId, CancellationToken ct = default) => pending;
+    }
+
+    [Fact]
     public async Task AddUser_rejects_invalid_input_without_calling_service()
     {
         _vm.UserInput = "!!bad!!";

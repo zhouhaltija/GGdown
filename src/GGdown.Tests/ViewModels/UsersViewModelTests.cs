@@ -1,4 +1,4 @@
-using GGdown.Data;
+﻿using GGdown.Data;
 using GGdown.Engine;
 using GGdown.Paths;
 using GGdown.Services;
@@ -56,6 +56,237 @@ public class UsersViewModelTests : IDisposable
 
     private static User NewUser(string restId, string name, long count = 0, DateTime? last = null) => new()
     { SiteId = "twitter", RestId = restId, ScreenName = name, Source = UserSource.Following, DownloadCount = count, LastDownloadAt = last, AddedAt = DateTime.UtcNow, UpdatedAt = DateTime.UtcNow };
+
+    [Fact]
+    public async Task Initial_user_page_bounds_loaded_rows_without_truncating_bulk_query()
+    {
+        _db.Users.AddRange(Enumerable.Range(10, 205).Select(i => NewUser(i.ToString(), $"user-{i}")));
+        await _db.SaveChangesAsync();
+
+        await _vm.RefreshCommand.ExecuteAsync(null);
+
+        Assert.Equal(200, _vm.Users.Count);
+        var all = await new UserQueryService(new SingleSiteDbContextFactory(_db))
+            .ListAsync("twitter", new UserFilter());
+        Assert.Equal(207, all.Count);
+    }
+
+    [Fact]
+    public async Task Load_more_preserves_selection_and_search_and_sort_reset_the_cursor()
+    {
+        _db.Users.AddRange(Enumerable.Range(10, 205).Select(i => NewUser(i.ToString(), $"user-{i}")));
+        await _db.SaveChangesAsync();
+        await _vm.RefreshCommand.ExecuteAsync(null);
+        Assert.True(_vm.HasMoreUsers);
+        _vm.SelectAll(true);
+        await _vm.LoadMoreCommand.ExecuteAsync(null);
+        Assert.Equal(207, _vm.Users.Count);
+        Assert.Equal(200, _vm.SelectedCount);
+        Assert.False(_vm.HasMoreUsers);
+
+        _vm.SortBy = "download_count";
+        await WaitUntil(() => _vm.Users.Count == 200 && _vm.HasMoreUsers);
+        _vm.SearchText = "alice";
+        Assert.False(_vm.LoadMoreCommand.CanExecute(null));
+        await WaitUntil(() => _vm.Users.Count == 1);
+        Assert.Equal("alice", _vm.Users[0].Model.ScreenName);
+        Assert.False(_vm.HasMoreUsers);
+    }
+
+    [Fact]
+    public async Task Completed_unloaded_user_invalidates_cursor_and_reloads_new_sort_position_once()
+    {
+        _db.Users.AddRange(Enumerable.Range(10, 205).Select(i => NewUser(i.ToString(), $"user-{i}")));
+        await _db.SaveChangesAsync();
+        var queue = new PaginationQueue();
+        var query = new GatedPaginationQuery(new UserQueryService(new SingleSiteDbContextFactory(_db)));
+        using var vm = CreatePaginationVm(query, queue);
+        await vm.RefreshCommand.ExecuteAsync(null);
+        var hidden = _db.Users.OrderBy(u => u.Id).Last();
+        Assert.DoesNotContain(vm.Users, r => r.Model.Id == hidden.Id);
+        hidden.LastDownloadAt = DateTime.UtcNow.AddDays(1);
+        hidden.DownloadCount = 1;
+        await _db.SaveChangesAsync();
+        var completed = new JobSnapshot(990, "twitter", TargetKind.UserMedia, "用户", JobStatus.Completed,
+            1, 0, 0, 1, null, null, UserId: hidden.Id);
+
+        queue.Publish(completed with { Status = JobStatus.Running });
+        queue.Publish(completed);
+
+        Assert.False(vm.HasMoreUsers);
+        Assert.False(vm.LoadMoreCommand.CanExecute(null));
+        await WaitUntil(() => vm.Users.Any(r => r.Model.Id == hidden.Id));
+        Assert.Equal(hidden.Id, vm.Users[0].Model.Id);
+        Assert.Equal(2, query.PageCalls);
+        queue.Publish(completed, removed: true);
+        await Task.Delay(450);
+        Assert.Equal(2, query.PageCalls);
+    }
+
+    [Fact]
+    public async Task Completed_user_reloads_when_initial_page_has_not_been_applied()
+    {
+        _db.Users.AddRange(Enumerable.Range(10, 205).Select(i => NewUser(i.ToString(), $"user-{i}")));
+        await _db.SaveChangesAsync();
+        var queue = new PaginationQueue();
+        var query = new GatedPaginationQuery(new UserQueryService(new SingleSiteDbContextFactory(_db))) { DelayFirstPage = true };
+        using var vm = CreatePaginationVm(query, queue);
+        var loading = vm.RefreshCommand.ExecuteAsync(null);
+        await query.NextPageStarted.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        try
+        {
+            var hidden = _db.Users.OrderBy(u => u.Id).Last();
+            hidden.LastDownloadAt = DateTime.UtcNow.AddDays(1);
+            await _db.SaveChangesAsync();
+            var completed = new JobSnapshot(992, "twitter", TargetKind.UserMedia, "用户", JobStatus.Completed,
+                1, 0, 0, 1, null, null, UserId: hidden.Id);
+            queue.Publish(completed with { Status = JobStatus.Running });
+            queue.Publish(completed);
+            query.ReleaseNextPage.SetResult();
+            await loading;
+            await WaitUntil(() => query.PageCalls >= 2 && vm.Users.Any(r => r.Model.Id == hidden.Id));
+            Assert.Equal(hidden.Id, vm.Users[0].Model.Id);
+        }
+        finally { query.ReleaseNextPage.TrySetResult(); }
+    }
+
+    [Fact]
+    public async Task Stop_cancels_completed_user_debounce_and_restart_can_refresh()
+    {
+        _db.Users.AddRange(Enumerable.Range(10, 205).Select(i => NewUser(i.ToString(), $"user-{i}")));
+        await _db.SaveChangesAsync();
+        var queue = new PaginationQueue();
+        var query = new GatedPaginationQuery(new UserQueryService(new SingleSiteDbContextFactory(_db)));
+        using var vm = CreatePaginationVm(query, queue);
+        await vm.RefreshCommand.ExecuteAsync(null);
+        var completed = new JobSnapshot(991, "twitter", TargetKind.UserMedia, "用户", JobStatus.Completed,
+            1, 0, 0, 1, null, null, UserId: 1);
+        queue.Publish(completed with { Status = JobStatus.Running });
+        queue.Publish(completed);
+        vm.Stop();
+        await Task.Delay(450);
+        Assert.Equal(1, query.PageCalls);
+        vm.Start();
+        await vm.RefreshCommand.ExecuteAsync(null);
+        Assert.Equal(200, vm.Users.Count);
+        Assert.True(vm.HasMoreUsers);
+    }
+
+    [Theory]
+    [InlineData("search")]
+    [InlineData("sort")]
+    [InlineData("site")]
+    public async Task Delayed_next_page_cannot_append_after_query_changes(string change)
+    {
+        _db.Users.AddRange(Enumerable.Range(10, 205).Select(i => NewUser(i.ToString(), $"user-{i}")));
+        _db.Users.Add(new User { SiteId = "pixiv", RestId = "p1", ScreenName = "pixiv-only" });
+        await _db.SaveChangesAsync();
+        var query = new GatedPaginationQuery(new UserQueryService(new SingleSiteDbContextFactory(_db))) { DelayNextPage = true };
+        using var vm = CreatePaginationVm(query, new PaginationQueue());
+        await vm.RefreshCommand.ExecuteAsync(null);
+        var loading = vm.LoadMoreCommand.ExecuteAsync(null);
+        await query.NextPageStarted.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        try
+        {
+            if (change == "search") vm.SearchText = "alice";
+            else if (change == "sort") vm.SortBy = "download_count";
+            else await _site.SelectAsync("pixiv");
+            await WaitUntil(() => query.PageCalls >= 3);
+            var expected = vm.Users.Select(r => r.Model.Id).ToArray();
+            query.ReleaseNextPage.SetResult();
+            await loading;
+            Assert.Equal(expected, vm.Users.Select(r => r.Model.Id));
+            Assert.Equal(change == "sort" ? 200 : 1, vm.Users.Count);
+            if (change == "site") Assert.All(vm.Users, r => Assert.Equal("pixiv", r.SiteId));
+        }
+        finally { query.ReleaseNextPage.TrySetResult(); }
+    }
+
+    private UsersViewModel CreatePaginationVm(IUserQueryService query, IDownloadQueueService queue)
+    {
+        var factory = new SingleSiteDbContextFactory(_db);
+        var sites = new SiteRegistry([new TwitterSiteProvider(), new PixivSiteProvider()]);
+        return new UsersViewModel(query, new AccountQueryService(factory),
+            new UserService(factory, _engine, _paths, sites, NullLogger<UserService>.Instance), queue,
+            _settings, new SyncDispatcher(), sites, _site, new HistoryQueryService(factory));
+    }
+
+    private sealed class GatedPaginationQuery(IUserQueryService inner) : IUserQueryService
+    {
+        public int PageCalls { get; private set; }
+        public bool DelayNextPage { get; init; }
+        public bool DelayFirstPage { get; init; }
+        public TaskCompletionSource NextPageStarted { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        public TaskCompletionSource ReleaseNextPage { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        public async Task<UserPage> ListPageAsync(string siteId, UserFilter filter, UserCursor? cursor = null,
+            int pageSize = 200, CancellationToken ct = default)
+        {
+            var call = ++PageCalls;
+            var page = await inner.ListPageAsync(siteId, filter, cursor, pageSize, ct);
+            if ((DelayNextPage && cursor is not null) || (DelayFirstPage && call == 1))
+            {
+                NextPageStarted.TrySetResult();
+                // 故意忽略取消，模拟已完成查询但尚未投递的旧页。
+                await ReleaseNextPage.Task;
+            }
+            return page;
+        }
+        public Task<IReadOnlyList<User>> ListAsync(string siteId, UserFilter filter, CancellationToken ct = default)
+            => inner.ListAsync(siteId, filter, ct);
+        public Task<IReadOnlyList<User>> ListDownloadListAsync(string siteId, CancellationToken ct = default)
+            => inner.ListDownloadListAsync(siteId, ct);
+    }
+
+    private sealed class PaginationQueue : IDownloadQueueService
+    {
+        private readonly Dictionary<(string SiteId, long JobId), JobSnapshot> _active = [];
+        public IReadOnlyList<JobSnapshot> Active => _active.Values.ToList();
+        public int Concurrency { get; set; } = 1;
+        public event Action<JobSnapshot>? JobChanged;
+        public event Action<JobSnapshot>? JobRemoved;
+        public event Action<AccountInvalidNotice>? AccountInvalid { add { } remove { } }
+        public void Publish(JobSnapshot snapshot, bool removed = false)
+        {
+            var key = (snapshot.SiteId, snapshot.JobId);
+            if (snapshot.Status is JobStatus.Pending or JobStatus.Running) _active[key] = snapshot;
+            else _active.Remove(key);
+            if (removed) JobRemoved?.Invoke(snapshot);
+            else JobChanged?.Invoke(snapshot);
+        }
+        public Task<long> EnqueueUserMediaAsync(Account account, IReadOnlyList<User> users,
+            string baseDirectory, IReadOnlyDictionary<string, object?> siteOptions, CancellationToken ct = default)
+            => throw new NotSupportedException();
+        public Task<long> EnqueueUserContentAsync(Account account, IReadOnlyList<User> users, ContentKind kind,
+            string baseDirectory, IReadOnlyDictionary<string, object?> siteOptions, CancellationToken ct = default)
+            => throw new NotSupportedException();
+        public Task<long> EnqueueAccountContentAsync(Account account, ContentKind kind, string baseDirectory,
+            IReadOnlyDictionary<string, object?> siteOptions, CancellationToken ct = default)
+            => throw new NotSupportedException();
+        public Task<long> EnqueuePermalinkAsync(Account account, string url, string title, ContentKind kind,
+            string baseDirectory, IReadOnlyDictionary<string, object?> siteOptions, CancellationToken ct = default)
+            => throw new NotSupportedException();
+        public Task CancelAsync(long jobId, CancellationToken ct = default, string? siteId = null) => Task.CompletedTask;
+        public Task RecoverOnStartupAsync(CancellationToken ct = default) => Task.CompletedTask;
+    }
+
+    [Fact]
+    public async Task Delete_confirmation_keeps_original_site_when_platform_changes()
+    {
+        var pixiv = new User { SiteId = "pixiv", RestId = "p1", ScreenName = "pixiv-user", AddedAt = DateTime.UtcNow, UpdatedAt = DateTime.UtcNow };
+        _db.Users.Add(pixiv);
+        await _db.SaveChangesAsync();
+        await _vm.RefreshCommand.ExecuteAsync(null);
+        var aliceId = _vm.Users.Single(r => r.Model.ScreenName == "alice").Model.Id;
+        _vm.Users.Single(r => r.Model.Id == aliceId).IsSelected = true;
+        var confirm = new TaskCompletionSource<bool>();
+        _vm.ConfirmDeleteAsync = _ => confirm.Task;
+        var deleting = _vm.DeleteSelectedCommand.ExecuteAsync(null);
+        await _site.SelectAsync("pixiv");
+        confirm.SetResult(true);
+        await deleting;
+        Assert.False(await _db.Users.AnyAsync(u => u.Id == aliceId));
+        Assert.True(await _db.Users.AnyAsync(u => u.Id == pixiv.Id));
+    }
 
     [Fact]
     public async Task Refresh_loads_users_with_pinned_first_and_binds_fields()
@@ -575,6 +806,9 @@ public class UsersViewModelTests : IDisposable
 
     private sealed class ThrowingUserQuery : IUserQueryService
     {
+        public Task<UserPage> ListPageAsync(string siteId, UserFilter filter, UserCursor? cursor = null,
+            int pageSize = 200, CancellationToken ct = default)
+            => throw new InvalidOperationException("boom");
         public Task<IReadOnlyList<User>> ListAsync(string siteId, UserFilter filter, CancellationToken ct = default)
             => throw new InvalidOperationException("boom");
         public Task<IReadOnlyList<User>> ListDownloadListAsync(string siteId, CancellationToken ct = default)

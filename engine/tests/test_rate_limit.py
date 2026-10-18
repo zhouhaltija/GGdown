@@ -22,6 +22,46 @@ def make_config(tmp_path, rate):
     return {"settings-db": str(settings), "state-db": str(tmp_path / "rate.db")}
 
 
+@pytest.mark.parametrize("raw", ['invalid-json', 'true', '"1024"', '-1', '1073741825', 'null', '{}'])
+def test_invalid_runtime_rate_is_reported_instead_of_bypassing_limit(tmp_path, raw):
+    from rate_limit import SharedRateLimiter
+
+    config = make_config(tmp_path, 1024)
+    config["version"] = 1
+    with sqlite3.connect(config["settings-db"]) as db:
+        db.execute("UPDATE Settings SET Value = ?", (raw,))
+    with SharedRateLimiter(config) as limiter:
+        with pytest.raises(ValueError):
+            limiter.consume(1)
+
+
+@pytest.mark.parametrize("changes", [
+    {"version": 2}, {"version": "1"}, {"version": True},
+    {"settings-db": ""}, {"state-db": None},
+])
+def test_invalid_rate_contract_is_rejected_before_download(tmp_path, changes):
+    from rate_limit import SharedRateLimiter
+
+    config = make_config(tmp_path, 0)
+    config.update(changes)
+    with pytest.raises(ValueError):
+        with SharedRateLimiter(config):
+            pass
+
+
+def test_missing_rate_setting_defaults_to_unlimited(tmp_path, monkeypatch):
+    from rate_limit import SharedRateLimiter
+
+    config = make_config(tmp_path, 1024)
+    config["version"] = 1
+    with sqlite3.connect(config["settings-db"]) as db:
+        db.execute("DELETE FROM Settings")
+    monkeypatch.setattr(time, "sleep", lambda _: pytest.fail("缺失设置应不限速"))
+    with SharedRateLimiter(config) as limiter:
+        limiter.consume(1048576)
+    assert not Path(config["state-db"]).exists()
+
+
 def set_rate(config, rate):
     with sqlite3.connect(config["settings-db"]) as db:
         db.execute("UPDATE Settings SET Value = ?", (json.dumps(rate),))

@@ -1,4 +1,4 @@
-<Page x:Class="GGdown.App.Views.UsersPage"
+﻿<Page x:Class="GGdown.App.Views.UsersPage"
       xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
       xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
       xmlns:controls="using:CommunityToolkit.WinUI.UI.Controls"
@@ -63,9 +63,9 @@
                 <DropDownButton Content="选择" AutomationProperties.Name="选择">
                     <DropDownButton.Flyout>
                         <MenuFlyout Placement="BottomEdgeAlignedLeft">
-                            <MenuFlyoutItem Text="全选" Command="{x:Bind Vm.SelectAllCommand}"/>
+                            <MenuFlyoutItem Text="全选已加载" Command="{x:Bind Vm.SelectAllCommand}"/>
                             <MenuFlyoutItem Text="取消全选" Command="{x:Bind Vm.DeselectAllCommand}"/>
-                            <MenuFlyoutItem Text="反选" Command="{x:Bind Vm.InvertSelectionCommand}"/>
+                            <MenuFlyoutItem Text="反选已加载" Command="{x:Bind Vm.InvertSelectionCommand}"/>
                         </MenuFlyout>
                     </DropDownButton.Flyout>
                 </DropDownButton>
@@ -262,8 +262,12 @@
                 <Button Content="删除…" Command="{x:Bind Vm.DeleteSelectedCommand}"/>
                 <HyperlinkButton Content="取消选择" Command="{x:Bind Vm.DeselectAllCommand}"/>
             </StackPanel>
-            <TextBlock Grid.Column="1" VerticalAlignment="Center" HorizontalAlignment="Right" Opacity="0.7"
-                       Text="{x:Bind Vm.UserCountText, Mode=OneWay}"/>
+            <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="12" HorizontalAlignment="Right">
+                <Button Content="{x:Bind Vm.LoadMoreText, Mode=OneWay}" Command="{x:Bind Vm.LoadMoreCommand}"
+                        Visibility="{x:Bind conv:UiConv.ToVisibility(Vm.HasMoreUsers), Mode=OneWay}"/>
+                <TextBlock VerticalAlignment="Center" Opacity="0.7"
+                           Text="{x:Bind Vm.UserCountText, Mode=OneWay}"/>
+            </StackPanel>
         </Grid>
     </Grid>
 </Page>

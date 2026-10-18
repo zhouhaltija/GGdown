@@ -245,7 +245,7 @@ public class DownloadQueueServiceTests : IDisposable
     public async Task Auth_failure_fails_job_and_flags_account()
     {
         long? flagged = null;
-        _queue.AccountInvalid += (id, _) => flagged = id;
+        _queue.AccountInvalid += notice => flagged = notice.AccountId;
         _engine.OnDownload = (_, _, _, _) => throw new AuthException("cookie 无效");
 
         await _queue.EnqueueUserMediaAsync(_account, [_alice], @"D:\dl", Opts());
@@ -331,6 +331,13 @@ public class DownloadQueueServiceTests : IDisposable
         _alice.LastDownloadAt = previousDownloadAt;
         _alice.MediaCountAtDownload = 100;
         _alice.MediaCount = 200;
+        // 统计现在由历史幂等重建，既有两次下载需有对应历史，而不是只设显示计数。
+        _db.Jobs.AddRange(Enumerable.Range(0, 2).Select(_ => new DownloadJob
+        {
+            SiteId = "twitter", AccountId = _account.Id, UserId = _alice.Id,
+            Status = JobStatus.Completed, CreatedAt = previousDownloadAt, FinishedAt = previousDownloadAt,
+            MediaCountSnapshot = 100,
+        }));
         await _db.SaveChangesAsync();
         _engine.OnDownload = (_, _, progress, _) =>
         {
@@ -350,7 +357,7 @@ public class DownloadQueueServiceTests : IDisposable
         await queue.EnqueueUserMediaAsync(_account, [_alice], @"D:\dl", Opts());
         await WaitUntil(() => queue.Active.Count == 0);
 
-        var job = await _db.Jobs.AsNoTracking().SingleAsync();
+        var job = await _db.Jobs.AsNoTracking().OrderByDescending(j => j.Id).FirstAsync();
         var user = await _db.Users.AsNoTracking().SingleAsync();
         Assert.Equal(succeeds ? JobStatus.Completed : JobStatus.Failed, job.Status);
         Assert.Equal(downloadedFiles, job.DoneFiles);

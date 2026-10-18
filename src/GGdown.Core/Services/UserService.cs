@@ -47,7 +47,7 @@ public sealed class UserService(
     {
         await using var db = await siteFactory.CreateAsync(account.SiteId, ct);
         var rows = await db.FollowingCache.AsNoTracking()
-            .Where(x => x.SiteId == account.SiteId)
+            .Where(x => x.SiteId == account.SiteId && x.AccountId == account.Id)
             .OrderBy(x => x.SortOrder)
             .ToListAsync(ct);
         if (rows.Count == 0) return null;
@@ -61,13 +61,15 @@ public sealed class UserService(
     {
         var now = DateTime.UtcNow;
         await using var db = await siteFactory.CreateAsync(account.SiteId, ct);
-        await db.FollowingCache.Where(x => x.SiteId == account.SiteId).ExecuteDeleteAsync(ct);
+        await using var transaction = await db.Database.BeginTransactionAsync(ct);
+        await db.FollowingCache.Where(x => x.SiteId == account.SiteId && x.AccountId == account.Id).ExecuteDeleteAsync(ct);
         for (var i = 0; i < users.Count; i++)
         {
             var u = users[i];
             db.FollowingCache.Add(new FollowingCacheEntry
             {
                 SiteId = account.SiteId,
+                AccountId = account.Id,
                 RestId = u.RestId,
                 ScreenName = u.ScreenName,
                 DisplayName = u.DisplayName,
@@ -77,6 +79,7 @@ public sealed class UserService(
             });
         }
         await db.SaveChangesAsync(ct);
+        await transaction.CommitAsync(ct);
     }
 
     public async Task<IReadOnlySet<string>> GetIgnoredFollowingIdsAsync(Account account, CancellationToken ct = default)
@@ -204,13 +207,7 @@ public sealed class UserService(
 
     public async Task SetContentSelectionAsync(string siteId, long userId, UserContentSelection selection, CancellationToken ct = default)
     {
-        var valid = siteId switch
-        {
-            PixivSiteProvider.Id => selection is UserContentSelection.All or UserContentSelection.PixivArtworks or UserContentSelection.PixivNovels,
-            DouyinSiteProvider.Id => selection is UserContentSelection.All or UserContentSelection.DouyinVideos or UserContentSelection.DouyinGalleries,
-            _ => selection == UserContentSelection.All,
-        };
-        if (!valid) throw new ArgumentException("此平台不支持该下载内容选择", nameof(selection));
+        _ = sites.Get(siteId).UserFeatures.KindsFor(selection);
         await using var db = await siteFactory.CreateAsync(siteId, ct);
         await db.Users.Where(u => u.SiteId == siteId && u.Id == userId)
             .ExecuteUpdateAsync(s => s.SetProperty(u => u.ContentSelection, selection), ct);
@@ -218,7 +215,7 @@ public sealed class UserService(
 
     public async Task SetDownloadSinceAsync(string siteId, long userId, DateOnly? since, CancellationToken ct = default)
     {
-        if (siteId != DouyinSiteProvider.Id)
+        if (!sites.Get(siteId).UserFeatures.DateFilter)
             throw new ArgumentException("仅抖音支持作者日期限制", nameof(siteId));
         await using var db = await siteFactory.CreateAsync(siteId, ct);
         await db.Users.Where(u => u.SiteId == siteId && u.Id == userId)

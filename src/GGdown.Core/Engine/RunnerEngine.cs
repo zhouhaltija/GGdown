@@ -74,8 +74,16 @@ public sealed class RunnerEngine(
         return user ?? throw EngineError(result);
     }
 
-    public async Task DownloadAsync(DownloadPlan plan, string cookiesFile,
-        IProgress<EngineEvent> progress, CancellationToken ct = default)
+    public Task DownloadAsync(DownloadPlan plan, string cookiesFile,
+        IProgress<EngineEvent> progress, CancellationToken ct = default) =>
+        DownloadWithEventsAsync(plan, cookiesFile, (ev, _) =>
+        {
+            progress.Report(ev);
+            return ValueTask.CompletedTask;
+        }, ct);
+
+    public async Task DownloadWithEventsAsync(DownloadPlan plan, string cookiesFile,
+        Func<EngineEvent, CancellationToken, ValueTask> onEvent, CancellationToken ct = default)
     {
         paths.EnsureCreated();
         var jobFile = Path.Combine(paths.TempDir, $"job-{Guid.NewGuid():N}.json");
@@ -89,6 +97,7 @@ public sealed class RunnerEngine(
                 {
                     ["ggdown-rate-limit"] = new Dictionary<string, object?>
                     {
+                        ["version"] = 1,
                         ["settings-db"] = paths.DbFile,
                         ["state-db"] = Path.Combine(paths.TempDir, "download-rate.db"),
                     },
@@ -105,9 +114,16 @@ public sealed class RunnerEngine(
             { "download", "--site", plan.SiteId, "--cookies", cookiesFile, "--job", jobFile };
             // 审查 Important-1：runner 非零退出且未发 fatal（如被系统 OOM 杀掉）时不能静默当成功，
             // 未收到 job-done 的下载必须抛异常交给队列标 Failed
-            var result = await RunAsync(args, progress.Report, ct, killOnCancel: true);
+            var hasFinal = false;
+            var result = await RunAsync(args, async (ev, token) =>
+            {
+                await onEvent(ev, token);
+                if (ev.Event == "job-done") hasFinal = true;
+            }, ct, killOnCancel: true);
             if (result.ExitCode != 0)
                 throw new EngineException($"runner 异常退出（退出码 {result.ExitCode}）：{result.StderrTail}");
+            if (!hasFinal)
+                throw new EngineException($"runner 未输出 job-done，下载结果不完整：{result.StderrTail}");
         }
         finally
         {
@@ -124,8 +140,16 @@ public sealed class RunnerEngine(
             ? new AuthException(result.StderrTail.Length > 0 ? result.StderrTail : "runner 认证失败")
             : new EngineException($"runner 退出码 {result.ExitCode}：{result.StderrTail}");
 
+    private Task<RunnerResult> RunAsync(IReadOnlyList<string> args,
+        Action<EngineEvent> onEvent, CancellationToken ct, bool killOnCancel) =>
+        RunAsync(args, (ev, _) =>
+        {
+            onEvent(ev);
+            return ValueTask.CompletedTask;
+        }, ct, killOnCancel);
+
     private async Task<RunnerResult> RunAsync(IReadOnlyList<string> args,
-        Action<EngineEvent> onEvent, CancellationToken ct, bool killOnCancel)
+        Func<EngineEvent, CancellationToken, ValueTask> onEvent, CancellationToken ct, bool killOnCancel)
     {
         // B8 警告清理：CS9113（log 主构造参数未读）——Debug 级记录起止（默认 MinimumLevel=Information 不落盘）
         log.LogDebug("runner 启动：{Args}", string.Join(" ", args));
@@ -135,7 +159,7 @@ public sealed class RunnerEngine(
         var psi = new ProcessStartInfo
         {
             FileName = options.PythonExe,
-            WorkingDirectory = paths.EngineDir,
+            WorkingDirectory = Path.GetDirectoryName(Path.GetFullPath(options.RunnerScript)) ?? paths.EngineDir,
             UseShellExecute = false,
             CreateNoWindow = true,
             RedirectStandardOutput = true,
@@ -164,24 +188,42 @@ public sealed class RunnerEngine(
 
         using var p = new Process { StartInfo = psi };
         p.Start();
+        using var lifetime = RunnerProcessLifetime.Attach(p);
 
-        var stderrTask = p.StandardError.ReadToEndAsync(ct);
+        var stderrTask = ReadStderrTailAsync(p.StandardError);
         string? fatalMessage = null, fatalKind = null;
+        using var handshake = CancellationTokenSource.CreateLinkedTokenSource(ct);
+        handshake.CancelAfter(options.HandshakeTimeout);
+        var hasHello = false;
 
         var stdoutTask = Task.Run(async () =>
         {
             string? line;
-            while ((line = await p.StandardOutput.ReadLineAsync(ct)) is not null)
+            while ((line = await p.StandardOutput.ReadLineAsync(handshake.Token)) is not null)
             {
+                if (string.IsNullOrWhiteSpace(line)) continue;
                 var ev = JsonlParser.Parse(line);
+                if (!hasHello)
+                {
+                    if (ev?.Event != "hello" || ev.Protocol is null)
+                        throw new EngineException("runner 协议握手失败：首条消息必须是有效的 hello");
+                    if (ev.Protocol != 1)
+                        throw new EngineException($"runner 协议版本 {ev.Protocol} 与应用不兼容（需要 1）");
+                    hasHello = true;
+                    // 计时器只约束握手；后续下载和可等待的事件接收不受此期限限制。
+                    handshake.CancelAfter(Timeout.InfiniteTimeSpan);
+                }
+                else if (ev?.Event == "hello")
+                    throw new EngineException("runner 协议顺序错误：重复 hello");
                 if (ev is null) continue;
                 if (ev.Event == "fatal")
                 {
                     fatalMessage = ev.Message ?? "runner fatal";
                     fatalKind = ev.Kind;
                 }
-                onEvent(ev);
+                await onEvent(ev, ct);
             }
+            if (!hasHello) throw new EngineException("runner 协议握手失败：未收到 hello");
         }, CancellationToken.None);
 
         try
@@ -189,21 +231,23 @@ public sealed class RunnerEngine(
             await stdoutTask;
             await p.WaitForExitAsync(ct);
         }
-        catch (OperationCanceledException)
+        catch (Exception error)
         {
             TryKill(p);
             // Kill 发出终止请求后并不等待退出，取消完成前应确认工作目录和流均已释放。
             try { await p.WaitForExitAsync(CancellationToken.None).WaitAsync(TimeSpan.FromSeconds(5)); }
             catch (TimeoutException ex) { log.LogWarning(ex, "取消后 runner 未在 5 秒内退出"); }
             try { await Task.WhenAll(stdoutTask, stderrTask).WaitAsync(TimeSpan.FromSeconds(5)); }
-            catch (OperationCanceledException) { }
-            catch (IOException) { } // 进程被终止时，管道可能已经关闭。
-            catch (TimeoutException ex) { log.LogWarning(ex, "取消后 runner 输出流未在 5 秒内关闭"); }
+            catch (Exception ex) { log.LogDebug(ex, "清理 runner 输出流（保留原始异常）"); }
+            var diagnostic = stderrTask.IsCompletedSuccessfully ? stderrTask.Result : "";
+            if (error is OperationCanceledException && !ct.IsCancellationRequested && !hasHello)
+                throw new EngineException($"runner 协议握手超时：{diagnostic}");
+            if (error is EngineException protocolError && !hasHello && diagnostic.Length > 0)
+                throw new EngineException($"{protocolError.Message}：{diagnostic}", protocolError.Kind);
             throw;
         }
 
-        var stderr = await stderrTask;
-        var tail = stderr.Length > 2000 ? stderr[^2000..] : stderr;
+        var tail = await stderrTask;
         var exitCode = p.ExitCode;
         log.LogDebug("runner 退出：退出码 {ExitCode}", exitCode);
 
@@ -214,6 +258,30 @@ public sealed class RunnerEngine(
                 ? new AuthException(fatalMessage)
                 : new EngineException(fatalMessage, fatalKind);
         return new RunnerResult(exitCode, tail);
+    }
+
+    private static async Task<string> ReadStderrTailAsync(StreamReader reader)
+    {
+        const int capacity = 2000;
+        var tail = new StringBuilder(capacity);
+        var buffer = new char[4096];
+        int count;
+        // 不按行读取，单条超长诊断也不能产生与日志总量成比例的分配。
+        while ((count = await reader.ReadAsync(buffer.AsMemory())) > 0)
+        {
+            if (count >= capacity)
+            {
+                tail.Clear();
+                tail.Append(buffer, count - capacity, capacity);
+            }
+            else
+            {
+                var excess = tail.Length + count - capacity;
+                if (excess > 0) tail.Remove(0, excess);
+                tail.Append(buffer, 0, count);
+            }
+        }
+        return tail.ToString();
     }
 
     private void TryKill(Process p)

@@ -18,10 +18,15 @@ public sealed partial class UsersPage : Page
 {
     public UsersViewModel Vm { get; private set; } = null!;
 
+    private readonly IServiceScope _scope;
+    private bool _isNavigated;
+
     public UsersPage()
     {
         // 控制器裁定 1：构造函数中解析 VM 并在 InitializeComponent 前赋 Vm（x:Bind 初始求值需要）
-        Vm = App.Current.Services.GetRequiredService<UsersViewModel>();
+        _scope = App.Current.Services.CreateScope();
+        Vm = _scope.ServiceProvider.GetRequiredService<UsersViewModel>();
+        App.Current.MainWindow.Closed += OnWindowClosed;
         InitializeComponent();
         // B4 接线：占位事件 → ContentDialog（对话框为页面级 UI，不进 VM）
         Vm.ShowAddUserRequested += OnShowAddUserRequested;
@@ -87,9 +92,9 @@ public sealed partial class UsersPage : Page
             };
             var result = await dialog.ShowAsync();
             if (result == ContentDialogResult.Secondary)
-                await Vm.SetUserDownloadSinceAsync(row.Model.Id, null);
+                await Vm.SetUserDownloadSinceAsync(row.Model.Id, null, row.SiteId);
             else if (result == ContentDialogResult.Primary && picker.Date is { } selected)
-                await Vm.SetUserDownloadSinceAsync(row.Model.Id, DateOnly.FromDateTime(selected.DateTime));
+                await Vm.SetUserDownloadSinceAsync(row.Model.Id, DateOnly.FromDateTime(selected.DateTime), row.SiteId);
             else if (result == ContentDialogResult.Primary)
                 Vm.StatusMessage = "请选择日期，或使用站点默认";
         }
@@ -102,15 +107,32 @@ public sealed partial class UsersPage : Page
     protected override async void OnNavigatedTo(NavigationEventArgs e)
     {
         base.OnNavigatedTo(e);
+        _isNavigated = true;
         try
         {
             await App.Readiness; // 控制器裁定 2：等建库+恢复完成后再首刷
+            if (!_isNavigated) return;
+            Vm.Start();
             await Vm.RefreshCommand.ExecuteAsync(null);
         }
         catch (Exception ex) // 控制器裁定 5（B3 审查 Minor）：坏库等异常不崩 UI 线程
         {
             Vm.StatusMessage = $"加载失败：{ex.Message}";
         }
+    }
+
+    protected override void OnNavigatedFrom(NavigationEventArgs e)
+    {
+        _isNavigated = false;
+        Vm.Stop();
+        base.OnNavigatedFrom(e);
+    }
+
+    private void OnWindowClosed(object sender, WindowEventArgs args)
+    {
+        App.Current.MainWindow.Closed -= OnWindowClosed;
+        Vm.Stop();
+        _scope.Dispose();
     }
 
     private async void OnPasteFromClipboardClick(object sender, RoutedEventArgs e)
@@ -124,7 +146,8 @@ public sealed partial class UsersPage : Page
                 return;
             }
             var text = await content.GetTextAsync();
-            var vm = App.Current.Services.GetRequiredService<ImportViewModel>();
+            using var scope = App.Current.Services.CreateScope();
+            var vm = scope.ServiceProvider.GetRequiredService<ImportViewModel>();
             vm.ImportCompleted += OnImportCompleted;
             vm.UserInput = text;
             if (string.IsNullOrWhiteSpace(vm.UserInputError) && !string.IsNullOrWhiteSpace(text))
@@ -150,7 +173,8 @@ public sealed partial class UsersPage : Page
     {
         try
         {
-            var vm = App.Current.Services.GetRequiredService<ImportViewModel>();
+            using var scope = App.Current.Services.CreateScope();
+            var vm = scope.ServiceProvider.GetRequiredService<ImportViewModel>();
             vm.ImportCompleted += OnImportCompleted;
             var dialog = new AddUserDialog(vm) { XamlRoot = App.Current.MainWindow.DialogXamlRoot };
             if (await dialog.ShowAsync() != ContentDialogResult.Primary) return;
@@ -168,7 +192,8 @@ public sealed partial class UsersPage : Page
     {
         try
         {
-            var vm = App.Current.Services.GetRequiredService<ImportViewModel>();
+            using var scope = App.Current.Services.CreateScope();
+            var vm = scope.ServiceProvider.GetRequiredService<ImportViewModel>();
             vm.ImportCompleted += OnImportCompleted;
             var dialog = new ImportCookieDialog(App.Current.Services.GetRequiredService<FileDialogService>(), vm.RequiresRefreshToken)
             {
@@ -195,7 +220,8 @@ public sealed partial class UsersPage : Page
     {
         try
         {
-            var picker = App.Current.Services.GetRequiredService<FollowingPickerViewModel>();
+            using var scope = App.Current.Services.CreateScope();
+            var picker = scope.ServiceProvider.GetRequiredService<FollowingPickerViewModel>();
             picker.ImportCompleted += OnImportCompleted;
             var dialog = new FollowingListDialog(picker) { XamlRoot = App.Current.MainWindow.DialogXamlRoot };
             if (await dialog.ShowAsync() != ContentDialogResult.Primary) return;

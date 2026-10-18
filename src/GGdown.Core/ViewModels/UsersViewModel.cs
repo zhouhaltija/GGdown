@@ -1,4 +1,4 @@
-using System.Collections.ObjectModel;
+﻿using System.Collections.ObjectModel;
 using System.Diagnostics;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
@@ -19,6 +19,7 @@ public sealed partial class UserRowViewModel : ObservableObject
 {
     private bool _isSelected;
     private bool _isDownloading;
+    private readonly UserDownloadFeatures _features;
 
     public UserRowViewModel(
         User model,
@@ -32,10 +33,12 @@ public sealed partial class UserRowViewModel : ObservableObject
         bool supportsHighlights = false,
         string siteId = "",
         Func<UserRowViewModel, UserContentSelection, Task>? setContentSelection = null,
-        Action<UserRowViewModel>? editDownloadSince = null)
+        Action<UserRowViewModel>? editDownloadSince = null,
+        UserDownloadFeatures? features = null)
     {
         Model = model;
         SiteId = siteId;
+        _features = features ?? UserDownloadProfiles.For(siteId);
         SupportsHighlights = supportsHighlights;
         DownloadCommand = new AsyncRelayCommand(() => downloadOne(this));
         TogglePinCommand = new RelayCommand(() => togglePin(this));
@@ -49,11 +52,9 @@ public sealed partial class UserRowViewModel : ObservableObject
         SetAllContentCommand = new AsyncRelayCommand(
             () => setContentSelection?.Invoke(this, UserContentSelection.All) ?? Task.CompletedTask);
         SetPrimaryContentCommand = new AsyncRelayCommand(
-            () => setContentSelection?.Invoke(this, siteId == PixivSiteProvider.Id
-                ? UserContentSelection.PixivArtworks : UserContentSelection.DouyinVideos) ?? Task.CompletedTask);
+            () => setContentSelection?.Invoke(this, _features.Choices.ElementAtOrDefault(1)?.Selection ?? UserContentSelection.All) ?? Task.CompletedTask);
         SetSecondaryContentCommand = new AsyncRelayCommand(
-            () => setContentSelection?.Invoke(this, siteId == PixivSiteProvider.Id
-                ? UserContentSelection.PixivNovels : UserContentSelection.DouyinGalleries) ?? Task.CompletedTask);
+            () => setContentSelection?.Invoke(this, _features.Choices.ElementAtOrDefault(2)?.Selection ?? UserContentSelection.All) ?? Task.CompletedTask);
         EditDownloadSinceCommand = new RelayCommand(() => editDownloadSince?.Invoke(this));
     }
 
@@ -104,24 +105,18 @@ public sealed partial class UserRowViewModel : ObservableObject
     public string? Bio => Model.Bio;
     public bool SupportsHighlights { get; }
     public bool ShowHighlights => SupportsHighlights;
-    public bool ShowContentSelection => SiteId is PixivSiteProvider.Id or DouyinSiteProvider.Id;
-    public bool ShowDownloadSince => SiteId == DouyinSiteProvider.Id;
-    public string ContentSelectionText => Model.ContentSelection switch
-    {
-        UserContentSelection.PixivArtworks => "仅插画漫画",
-        UserContentSelection.PixivNovels => "仅小说",
-        UserContentSelection.DouyinVideos => "仅视频",
-        UserContentSelection.DouyinGalleries => "仅图集",
-        _ => SiteId == PixivSiteProvider.Id ? "插画漫画+小说" : "视频+图集",
-    };
+    public bool ShowContentSelection => _features.Choices.Count > 1;
+    public bool ShowDownloadSince => _features.DateFilter;
+    public string ContentSelectionText => (_features.Choices.FirstOrDefault(c => c.Selection == Model.ContentSelection)
+        ?? _features.Choices[0]).Summary;
     public string AllContentOptionText => (Model.ContentSelection == UserContentSelection.All ? "✓ " : "")
-        + (SiteId == PixivSiteProvider.Id ? "插画漫画和小说" : "视频和图集");
+        + _features.Choices[0].Label;
     public string PrimaryContentOptionText =>
-        (Model.ContentSelection == (SiteId == PixivSiteProvider.Id ? UserContentSelection.PixivArtworks : UserContentSelection.DouyinVideos) ? "✓ " : "")
-        + (SiteId == PixivSiteProvider.Id ? "仅插画漫画" : "仅视频");
+        (Model.ContentSelection == _features.Choices.ElementAtOrDefault(1)?.Selection ? "✓ " : "")
+        + (_features.Choices.ElementAtOrDefault(1)?.Label ?? "");
     public string SecondaryContentOptionText =>
-        (Model.ContentSelection == (SiteId == PixivSiteProvider.Id ? UserContentSelection.PixivNovels : UserContentSelection.DouyinGalleries) ? "✓ " : "")
-        + (SiteId == PixivSiteProvider.Id ? "仅小说" : "仅图集");
+        (Model.ContentSelection == _features.Choices.ElementAtOrDefault(2)?.Selection ? "✓ " : "")
+        + (_features.Choices.ElementAtOrDefault(2)?.Label ?? "");
     public long NewMediaCount
     {
         get
@@ -164,7 +159,7 @@ public sealed partial class UserRowViewModel : ObservableObject
 /// 故 ImportButtonVisibility/BottomBarVisibility 以 bool 语义暴露（ImportButtonVisible/BottomBarVisible），
 /// 由页面层用静态转换函数映射为 Visibility；SelectedCountText 为纯字符串，直接绑定。
 /// </summary>
-public partial class UsersViewModel : StatusViewModel
+public partial class UsersViewModel : StatusViewModel, IDisposable
 {
     private readonly ICurrentSite _currentSite;
     private readonly IUserQueryService _userQuery;
@@ -180,8 +175,15 @@ public partial class UsersViewModel : StatusViewModel
 
     private CancellationTokenSource? _refreshDebounce; // SearchText/SortBy 共用的防抖等待
     private int _refreshId; // 并发刷新代数：过期刷新的集合变更丢弃
+    private CancellationTokenSource? _queryCancellation;
+    private bool _listening;
+    private string? _rowsSiteId;
+    private readonly System.Collections.Concurrent.ConcurrentDictionary<(string SiteId, long JobId), bool> _jobActivity = new();
     private bool _hasUsers;
     private bool _hasAccount;
+    private UserCursor? _pageCursor;
+    private UserFilter? _pageFilter;
+    private bool _isLoadingUsers;
 
     public UsersViewModel(IUserQueryService userQuery, IAccountQueryService accountQuery,
         IUserService users, IDownloadQueueService queue, IAppSettings settings,
@@ -197,20 +199,21 @@ public partial class UsersViewModel : StatusViewModel
         _dispatcher = dispatcher;
         _sites = sites;
         _currentSite = currentSite;
-        _currentSite.Changed += () => _ = RefreshAsync();
+
 
         Users = [];
         // AllowConcurrentExecutions：防抖触发的刷新不被默认的并发闸门静默丢弃，
         // 过期结果由 _refreshId 代数守卫在集合变更处丢弃
         RefreshCommand = new AsyncRelayCommand(RefreshAsync, options: AsyncRelayCommandOptions.AllowConcurrentExecutions);
+        LoadMoreCommand = new AsyncRelayCommand(LoadMoreAsync, () => HasMoreUsers && !_isLoadingUsers && _rowsSiteId == SiteId);
         DownloadSelectedCommand = new AsyncRelayCommand(DownloadSelectedAsync);
         DeleteSelectedCommand = new AsyncRelayCommand(DeleteSelectedAsync);
         SkipSelectedCommand = new AsyncRelayCommand(() => SetSelectedSkippedAsync(true));
         UnskipSelectedCommand = new AsyncRelayCommand(() => SetSelectedSkippedAsync(false));
-        TogglePinCommand = new RelayCommand<UserRowViewModel>(u => _ = TogglePinCoreAsync(u));
-        DownloadOneCommand = new AsyncRelayCommand<UserRowViewModel>(DownloadOneAsync);
-        OpenProfileCommand = new RelayCommand<UserRowViewModel>(OpenProfileCore);
-        OpenFolderCommand = new AsyncRelayCommand<UserRowViewModel>(OpenFolderCoreAsync);
+        TogglePinCommand = new RelayCommand<UserRowViewModel>(u => { if (u is not null) _ = TogglePinCoreAsync(u); });
+        DownloadOneCommand = new AsyncRelayCommand<UserRowViewModel>(u => u is null ? Task.CompletedTask : DownloadOneAsync(u));
+        OpenProfileCommand = new RelayCommand<UserRowViewModel>(u => { if (u is not null) OpenProfileCore(u); });
+        OpenFolderCommand = new AsyncRelayCommand<UserRowViewModel>(u => u is null ? Task.CompletedTask : OpenFolderCoreAsync(u));
         ShowAddUserCommand = new RelayCommand(() => ShowAddUserRequested?.Invoke());
         ShowSingleVideoDownloadCommand = new RelayCommand(() => ShowSingleVideoDownloadRequested?.Invoke(), () => SupportsSingleVideoDownload);
         ShowImportCookieCommand = new RelayCommand(() => ShowImportCookieRequested?.Invoke());
@@ -222,10 +225,43 @@ public partial class UsersViewModel : StatusViewModel
         InvertSelectionCommand = new RelayCommand(InvertSelection);
         RefreshProfilesCommand = new AsyncRelayCommand(RefreshProfilesAsync);
 
+        Start();
+    }
+
+    public void Start()
+    {
+        if (_listening) return;
+        _listening = true;
+        _currentSite.Changed += OnSiteChanged;
         _queue.AccountInvalid += OnAccountInvalid;
         _queue.JobChanged += OnJobSnapshot;
         _queue.JobRemoved += OnJobSnapshot;
+        _jobActivity.Clear();
+        foreach (var snapshot in _queue.Active)
+            _jobActivity[(snapshot.SiteId, snapshot.JobId)] = snapshot.Status is JobStatus.Pending or JobStatus.Running;
     }
+
+    public void Stop()
+    {
+        if (!_listening) return;
+        _listening = false;
+        _currentSite.Changed -= OnSiteChanged;
+        _queue.AccountInvalid -= OnAccountInvalid;
+        _queue.JobChanged -= OnJobSnapshot;
+        _queue.JobRemoved -= OnJobSnapshot;
+        ++_refreshId;
+        _queryCancellation?.Cancel();
+        _refreshDebounce?.Cancel();
+    }
+
+    public void Dispose()
+    {
+        Stop();
+        _queryCancellation?.Dispose();
+        _refreshDebounce?.Dispose();
+    }
+
+    private void OnSiteChanged() => _ = RefreshAsync();
 
     public ObservableCollection<UserRowViewModel> Users { get; }
 
@@ -234,13 +270,13 @@ public partial class UsersViewModel : StatusViewModel
     public bool HasAccount => _hasAccount;               // 驱动空状态引导与导入按钮
     public bool SupportsFollowingList => _currentSite.IsAvailable && _sites.IsRegistered(SiteId)
         && _sites.Get(SiteId).SupportedKinds.Contains(ContentKind.UserMedia)
-        && SiteId == TwitterSiteProvider.Id;
+        && _sites.Get(SiteId).UserFeatures.Following;
     public bool SupportsIncrementalDownload => _currentSite.IsAvailable && _sites.IsRegistered(SiteId)
         && _sites.Get(SiteId).SupportedKinds.Contains(ContentKind.UserMedia)
-        && SiteId is TwitterSiteProvider.Id or DouyinSiteProvider.Id;
+        && _sites.Get(SiteId).UserFeatures.Incremental;
     public bool CanShowFollowingList => _hasAccount && SupportsFollowingList;
-    public bool ShowManualAddGuide => _currentSite.IsAvailable && SiteId == DouyinSiteProvider.Id;
-    public bool SupportsSingleVideoDownload => _currentSite.IsAvailable && SiteId == DouyinSiteProvider.Id
+    public bool ShowManualAddGuide => _currentSite.IsAvailable && _sites.IsRegistered(SiteId) && _sites.Get(SiteId).UserFeatures.ManualAddGuide;
+    public bool SupportsSingleVideoDownload => ShowManualAddGuide
         && _sites.IsRegistered(SiteId) && _sites.Get(SiteId).SupportedKinds.Contains(ContentKind.Permalink);
     public bool BottomBarVisible => SelectedCount > 0;
     public bool IsSiteAvailable => _currentSite.IsAvailable;
@@ -252,7 +288,17 @@ public partial class UsersViewModel : StatusViewModel
     public string SelectedCountText => $"已选 {SelectedCount} 个";
     /// <summary>"刷新资料"作用范围显式化：有勾选只刷新勾选用户，否则刷新全部。</summary>
     public string RefreshProfilesText => SelectedCount > 0 ? "刷新选中资料" : "刷新全部资料";
-    public string UserCountText => Users.Count == 0 ? "" : $"共 {Users.Count} 个用户";
+    public string UserCountText => Users.Count == 0 ? "" : $"已加载 {Users.Count} 个用户";
+    public bool HasMoreUsers => _pageCursor is not null;
+    public string LoadMoreText => _isLoadingUsers ? "加载中…" : "加载更多";
+
+    private void NotifyPaging()
+    {
+        OnPropertyChanged(nameof(HasMoreUsers));
+        OnPropertyChanged(nameof(LoadMoreText));
+        OnPropertyChanged(nameof(UserCountText));
+        LoadMoreCommand.NotifyCanExecuteChanged();
+    }
 
     /// <summary>
     /// 删除确认（页面注入 ContentDialog）：参数为待删人数，返回 false 取消删除。
@@ -266,7 +312,9 @@ public partial class UsersViewModel : StatusViewModel
     [ObservableProperty]
     private string _sortBy = "last_download"; // F4 排序维度：last_download / download_count / added_at
 
-    public event Action? RequestReload;                     // B4 导入流程完成后通知刷新
+    [ObservableProperty]
+    private bool _sortDesc = true;
+
     public event Action? ShowAddUserRequested;              // B4 接线：添加用户对话框
     public event Action? ShowSingleVideoDownloadRequested;
     public event Action? ShowImportCookieRequested;         // B4 接线：导入 Cookie 对话框
@@ -274,6 +322,7 @@ public partial class UsersViewModel : StatusViewModel
     public event Action<UserRowViewModel>? EditUserDateRequested;
 
     public IAsyncRelayCommand RefreshCommand { get; }
+    public IAsyncRelayCommand LoadMoreCommand { get; }
     public IAsyncRelayCommand DownloadSelectedCommand { get; }
     public IAsyncRelayCommand DeleteSelectedCommand { get; }
     public IAsyncRelayCommand SkipSelectedCommand { get; }
@@ -301,8 +350,17 @@ public partial class UsersViewModel : StatusViewModel
 
     partial void OnSortByChanged(string value) => StartDebouncedRefresh();
 
+    partial void OnSortDescChanged(bool value) => StartDebouncedRefresh();
+
     private void StartDebouncedRefresh()
     {
+        // 筛选一变就废弃旧页，防抖期间也不能继续加载旧条件的下一页。
+        ++_refreshId;
+        _queryCancellation?.Cancel();
+        _pageCursor = null;
+        _pageFilter = null;
+        _isLoadingUsers = false;
+        _dispatcher.Post(NotifyPaging);
         _refreshDebounce?.Cancel();
         _refreshDebounce?.Dispose();
         var cts = _refreshDebounce = new CancellationTokenSource();
@@ -314,6 +372,8 @@ public partial class UsersViewModel : StatusViewModel
         try
         {
             await Task.Delay(300, ct);
+            ct.ThrowIfCancellationRequested();
+            if (!_listening) return;
             await RefreshAsync();
         }
         catch (OperationCanceledException)
@@ -338,16 +398,30 @@ public partial class UsersViewModel : StatusViewModel
 
     private async Task RefreshAsync()
     {
+        var siteId = SiteId;
+        var gen = ++_refreshId;
+        _queryCancellation?.Cancel();
+        _queryCancellation?.Dispose();
+        var ct = (_queryCancellation = new CancellationTokenSource()).Token;
+        var filter = new UserFilter(SearchText, SortBy, SortDesc);
+        _pageCursor = null;
+        _pageFilter = null;
+        _isLoadingUsers = true;
+        _dispatcher.Post(NotifyPaging);
+        bool IsCurrent() => gen == _refreshId && siteId == SiteId && !ct.IsCancellationRequested;
         try
         {
-            var gen = ++_refreshId;
-            var filter = new UserFilter(SearchText, SortBy);
-            var list = await _userQuery.ListAsync(SiteId, filter);
-            var account = await _accountQuery.GetActiveAsync(SiteId);
+            var page = await _userQuery.ListPageAsync(siteId, filter, ct: ct);
+            var list = page.Items;
+            var account = await _accountQuery.GetActiveAsync(siteId, ct);
             _dispatcher.Post(() =>
             {
-                if (gen != _refreshId) return; // 过期刷新：已被更新的查询取代
-                var selectedIds = Users.Where(r => r.IsSelected).Select(r => r.Model.Id).ToHashSet();
+                if (!IsCurrent()) return;
+                var selectedIds = _rowsSiteId == siteId ? Users.Where(r => r.IsSelected).Select(r => r.Model.Id).ToHashSet() : [];
+                _rowsSiteId = siteId;
+                _pageFilter = filter;
+                _pageCursor = page.NextCursor;
+                foreach (var old in Users) old.SelectedChanged -= OnRowSelectionChanged;
                 Users.Clear();
                 foreach (var user in list)
                 {
@@ -374,23 +448,70 @@ public partial class UsersViewModel : StatusViewModel
                 ShowSingleVideoDownloadCommand.NotifyCanExecuteChanged();
                 NotifySelection();
                 ApplyDownloadingState();
+                NotifyPaging();
             });
         }
         // 覆盖防抖/页面 OnNavigatedTo/OnAccountInvalid/命令四个入口：坏库等异常落 StatusMessage 不崩线程
-        catch (OperationCanceledException)
-        {
-            throw;
-        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested) { }
         catch (Exception ex)
         {
-            StatusMessage = $"刷新失败：{ex.Message}";
+            _dispatcher.Post(() => { if (IsCurrent()) StatusMessage = $"刷新失败：{ex.Message}"; });
+        }
+        finally
+        {
+            _dispatcher.Post(() =>
+            {
+                if (!IsCurrent()) return;
+                _isLoadingUsers = false;
+                NotifyPaging();
+            });
+        }
+    }
+
+    private async Task LoadMoreAsync()
+    {
+        if (_isLoadingUsers || _pageCursor is not { } cursor || _pageFilter is not { } filter || _rowsSiteId != SiteId) return;
+        var siteId = SiteId;
+        var gen = _refreshId;
+        var ct = _queryCancellation?.Token ?? CancellationToken.None;
+        bool IsCurrent() => gen == _refreshId && siteId == SiteId && !ct.IsCancellationRequested;
+        _isLoadingUsers = true;
+        _dispatcher.Post(NotifyPaging);
+        try
+        {
+            var page = await _userQuery.ListPageAsync(siteId, filter, cursor, ct: ct);
+            _dispatcher.Post(() =>
+            {
+                if (!IsCurrent()) return;
+                var loadedIds = Users.Select(r => r.Model.Id).ToHashSet();
+                foreach (var user in page.Items)
+                    if (loadedIds.Add(user.Id)) Users.Add(CreateRow(user));
+                _pageCursor = page.NextCursor;
+                ApplyDownloadingState();
+                NotifySelection();
+                NotifyPaging();
+            });
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested) { }
+        catch (Exception ex)
+        {
+            _dispatcher.Post(() => { if (IsCurrent()) StatusMessage = $"加载更多失败：{ex.Message}"; });
+        }
+        finally
+        {
+            _dispatcher.Post(() =>
+            {
+                if (!IsCurrent()) return;
+                _isLoadingUsers = false;
+                NotifyPaging();
+            });
         }
     }
 
     private UserRowViewModel CreateRow(User user)
     {
-        var supportsHighlights = _sites.IsRegistered(SiteId)
-            && _sites.Get(SiteId).SupportedKinds.Contains(ContentKind.UserHighlights);
+        var supportsHighlights = _sites.IsRegistered(user.SiteId)
+            && _sites.Get(user.SiteId).SupportedKinds.Contains(ContentKind.UserHighlights);
         var row = new UserRowViewModel(user,
             downloadOne: DownloadOneAsync,
             togglePin: u => _ = TogglePinCoreAsync(u),
@@ -400,9 +521,10 @@ public partial class UsersViewModel : StatusViewModel
             deleteOne: DeleteOneAsync,
             downloadHighlights: DownloadHighlightsAsync,
             supportsHighlights: supportsHighlights,
-            siteId: SiteId,
+            siteId: user.SiteId,
             setContentSelection: SetContentSelectionAsync,
-            editDownloadSince: row => EditUserDateRequested?.Invoke(row));
+            editDownloadSince: row => EditUserDateRequested?.Invoke(row),
+            features: _sites.IsRegistered(user.SiteId) ? _sites.Get(user.SiteId).UserFeatures : UserDownloadFeatures.Basic);
         row.SelectedChanged += OnRowSelectionChanged;
         return row;
     }
@@ -422,10 +544,11 @@ public partial class UsersViewModel : StatusViewModel
 
     private async Task DownloadSelectedAsync()
     {
-        var users = Users.Where(r => r.IsSelected).Select(r => r.Model).ToList();
+        var selected = Users.Where(r => r.IsSelected).ToList();
+        var users = selected.Select(r => r.Model).ToList();
         if (users.Count == 0) return;
         if (await DownloadUsersAsync(users))
-            SelectAll(false);
+            foreach (var row in selected) row.IsSelected = false;
     }
 
     private async Task DownloadIncrementalAsync()
@@ -453,10 +576,10 @@ public partial class UsersViewModel : StatusViewModel
         }
 
         if (await DownloadUsersAsync(candidates, isIncremental: true) && selected.Count > 0)
-            SelectAll(false);
+            foreach (var row in selected) row.IsSelected = false;
     }
 
-    private Task DownloadOneAsync(UserRowViewModel row) => DownloadUsersAsync([row.Model]);
+    private Task DownloadOneAsync(UserRowViewModel row) => DownloadUsersAsync([row.Model], requestSiteId: row.SiteId);
 
     private async Task DownloadNeverDownloadedAsync()
     {
@@ -481,7 +604,7 @@ public partial class UsersViewModel : StatusViewModel
     {
         try
         {
-            await _users.SetContentSelectionAsync(SiteId, row.Model.Id, selection);
+            await _users.SetContentSelectionAsync(row.SiteId, row.Model.Id, selection);
             await RefreshAsync();
         }
         catch (Exception ex)
@@ -490,11 +613,11 @@ public partial class UsersViewModel : StatusViewModel
         }
     }
 
-    public async Task SetUserDownloadSinceAsync(long userId, DateOnly? since)
+    public async Task SetUserDownloadSinceAsync(long userId, DateOnly? since, string? requestSiteId = null)
     {
         try
         {
-            await _users.SetDownloadSinceAsync(SiteId, userId, since);
+            await _users.SetDownloadSinceAsync(requestSiteId ?? SiteId, userId, since);
             await RefreshAsync();
         }
         catch (Exception ex)
@@ -503,24 +626,25 @@ public partial class UsersViewModel : StatusViewModel
         }
     }
 
-    private Task DownloadHighlightsAsync(UserRowViewModel row) => DownloadUsersAsync([row.Model], ContentKind.UserHighlights);
+    private Task DownloadHighlightsAsync(UserRowViewModel row) => DownloadUsersAsync([row.Model], ContentKind.UserHighlights, requestSiteId: row.SiteId);
 
     /// <returns>true：入队完成或全部被跳过（可清选中）；false：硬失败，保留勾选以便重试。</returns>
-    private async Task<bool> DownloadUsersAsync(IReadOnlyList<User> users, ContentKind? onlyKind = null, bool isIncremental = false)
+    private async Task<bool> DownloadUsersAsync(IReadOnlyList<User> users, ContentKind? onlyKind = null, bool isIncremental = false, string? requestSiteId = null)
     {
-        if (!_currentSite.IsAvailable)
+        var siteId = requestSiteId ?? users.FirstOrDefault()?.SiteId ?? SiteId;
+        if (!SiteCatalog.Get(siteId).Available)
         {
-            StatusMessage = ComingSoonMessage;
+            SetSiteStatus(siteId, ComingSoonMessage);
             return false;
         }
-        var downloadingIds = DownloadingUserIds();
+        var downloadingIds = DownloadingUserIds(siteId);
         var skippedPaused = users.Count(u => u.IsSkipped);
         var skippedDownloading = users.Count(u => !u.IsSkipped && downloadingIds.Contains(u.Id));
         var toDownload = users.Where(u => !u.IsSkipped && !downloadingIds.Contains(u.Id)).ToList();
         if (toDownload.Count == 0)
         {
             var targetPrefix = isIncremental ? "目标" : "选中";
-            StatusMessage = users.Count == 1
+            SetSiteStatus(siteId, users.Count == 1
                 ? downloadingIds.Contains(users[0].Id) && !users[0].IsSkipped
                     ? "该用户已在下载队列"
                     : "该用户已设为跳过，取消跳过后才能下载"
@@ -528,7 +652,7 @@ public partial class UsersViewModel : StatusViewModel
                     ? $"{targetPrefix}用户均在下载队列中"
                     : skippedDownloading > 0
                         ? $"{targetPrefix}用户均已跳过或已在下载队列"
-                        : $"{targetPrefix}用户均已设为跳过";
+                        : $"{targetPrefix}用户均已设为跳过");
             return true;
         }
 
@@ -536,51 +660,46 @@ public partial class UsersViewModel : StatusViewModel
         try
         {
             // 与 DownloadsViewModel.DownloadAccountContentAsync 对齐：坏库等异常落 StatusMessage 不崩线程
-            account = await _accountQuery.GetActiveAsync(SiteId);
+            account = await _accountQuery.GetActiveAsync(siteId);
         }
         catch (Exception ex)
         {
-            StatusMessage = $"账号状态获取失败：{ex.Message}";
+            SetSiteStatus(siteId, $"账号状态获取失败：{ex.Message}");
             return false;
         }
         if (account is null)
         {
-            StatusMessage = "请先在设置中导入 Cookie";
+            SetSiteStatus(siteId, "请先在设置中导入 Cookie");
             return false;
         }
         try
         {
             var dir = await _settings.GetDownloadDirectoryAsync();
-            var siteOptions = await _settings.GetSiteOptionsAsync(SiteId);
+            var siteOptions = await _settings.GetSiteOptionsAsync(siteId);
             if (onlyKind is ContentKind.UserHighlights)
             {
                 await _queue.EnqueueUserContentAsync(account, toDownload, ContentKind.UserHighlights, dir, siteOptions);
-                StatusMessage = $"已加入高光队列（{toDownload.Count} 个用户）";
+                SetSiteStatus(siteId, $"已加入高光队列（{toDownload.Count} 个用户）");
                 return true;
             }
-            if (SiteId == PixivSiteProvider.Id)
-            {
-                var artworks = toDownload.Where(u => u.ContentSelection != UserContentSelection.PixivNovels).ToList();
-                var novels = toDownload.Where(u => u.ContentSelection != UserContentSelection.PixivArtworks).ToList();
-                if (artworks.Count > 0)
-                    await _queue.EnqueueUserMediaAsync(account, artworks, dir, siteOptions);
-                if (novels.Count > 0)
-                    await _queue.EnqueueUserContentAsync(account, novels, ContentKind.UserNovels, dir, siteOptions);
-            }
-            else
-                await _queue.EnqueueUserMediaAsync(account, toDownload, dir, siteOptions);
+            var provider = _sites.Get(siteId);
+            var groups = toDownload.SelectMany(user => provider.UserFeatures.KindsFor(user.ContentSelection)
+                .Select(kind => (Kind: kind, User: user))).GroupBy(request => request.Kind);
+            foreach (var group in groups)
+                await _queue.EnqueueUserContentAsync(account, group.Select(request => request.User).ToList(),
+                    group.Key, dir, siteOptions);
             var extras = new List<string>();
             if (skippedPaused > 0) extras.Add($"略过 {skippedPaused} 个已跳过");
             if (skippedDownloading > 0) extras.Add($"略过 {skippedDownloading} 个下载中");
             var actionName = isIncremental ? "增量下载" : "下载";
-            StatusMessage = extras.Count == 0
+            SetSiteStatus(siteId, extras.Count == 0
                 ? $"已加入{actionName}队列（{toDownload.Count} 个用户）"
-                : $"已加入{actionName}队列（{toDownload.Count} 个用户，{string.Join("，", extras)}）";
+                : $"已加入{actionName}队列（{toDownload.Count} 个用户，{string.Join("，", extras)}）");
             return true;
         }
         catch (Exception ex) // EngineException 等
         {
-            StatusMessage = ex.Message;
+            SetSiteStatus(siteId, ex.Message);
             return false;
         }
     }
@@ -588,12 +707,13 @@ public partial class UsersViewModel : StatusViewModel
     // 删除前经页面注入的确认回调（ConfirmDeleteAsync）二次确认；删除的是库记录，不删已下载文件
     private async Task DeleteSelectedAsync()
     {
+        var siteId = _rowsSiteId ?? SiteId;
         var ids = Users.Where(r => r.IsSelected).Select(r => r.Model.Id).ToList();
         if (ids.Count == 0) return;
         if (ConfirmDeleteAsync is { } confirm && !await confirm(ids.Count)) return;
         try
         {
-            await _users.RemoveAsync(_currentSite.SiteId, ids);
+            await _users.RemoveAsync(siteId, ids);
             StatusMessage = $"已删除 {ids.Count} 个用户";
             await RefreshAsync();
         }
@@ -608,7 +728,7 @@ public partial class UsersViewModel : StatusViewModel
         if (ConfirmDeleteAsync is { } confirm && !await confirm(1)) return;
         try
         {
-            await _users.RemoveAsync(_currentSite.SiteId, [row.Model.Id]);
+            await _users.RemoveAsync(row.SiteId, [row.Model.Id]);
             StatusMessage = "已删除 1 个用户";
             await RefreshAsync();
         }
@@ -622,7 +742,7 @@ public partial class UsersViewModel : StatusViewModel
     {
         try
         {
-            await _users.SetPinnedAsync(_currentSite.SiteId, row.Model.Id, !row.Model.IsPinned);
+            await _users.SetPinnedAsync(row.SiteId, row.Model.Id, !row.Model.IsPinned);
             await RefreshAsync(); // 置顶排序键变更，重建列表
         }
         catch (Exception ex) // 控制器裁定 5（B3 审查授权）：fire-and-forget 路径异常不丢出崩 UI 线程
@@ -635,7 +755,7 @@ public partial class UsersViewModel : StatusViewModel
     {
         try
         {
-            await _users.SetSkippedAsync(_currentSite.SiteId, [row.Model.Id], !row.Model.IsSkipped);
+            await _users.SetSkippedAsync(row.SiteId, [row.Model.Id], !row.Model.IsSkipped);
             await RefreshAsync();
         }
         catch (Exception ex)
@@ -646,11 +766,12 @@ public partial class UsersViewModel : StatusViewModel
 
     private async Task SetSelectedSkippedAsync(bool skipped)
     {
+        var siteId = _rowsSiteId ?? SiteId;
         var ids = Users.Where(r => r.IsSelected).Select(r => r.Model.Id).ToList();
         if (ids.Count == 0) return;
         try
         {
-            await _users.SetSkippedAsync(_currentSite.SiteId, ids, skipped);
+            await _users.SetSkippedAsync(siteId, ids, skipped);
             StatusMessage = skipped ? $"已跳过 {ids.Count} 个用户" : $"已取消跳过 {ids.Count} 个用户";
             await RefreshAsync();
         }
@@ -666,8 +787,8 @@ public partial class UsersViewModel : StatusViewModel
         var url = row.Model.ProfileUrl;
         if (string.IsNullOrWhiteSpace(url))
         {
-            if (!_sites.IsRegistered(SiteId)) return;
-            url = _sites.Get(SiteId).BuildProfileUrl(row.Model.ScreenName, row.Model.RestId);
+            if (!_sites.IsRegistered(row.SiteId)) return;
+            url = _sites.Get(row.SiteId).BuildProfileUrl(row.Model.ScreenName, row.Model.RestId);
         }
         Process.Start(new ProcessStartInfo(url) { UseShellExecute = true });
     }
@@ -676,7 +797,7 @@ public partial class UsersViewModel : StatusViewModel
     {
         try
         {
-            var files = await _history.ListAsync(new HistoryFilter(SiteId, row.Model.Id)); // 拆库后 Id 仅库内唯一，必须带站点
+            var files = await _history.ListAsync(new HistoryFilter(row.SiteId, row.Model.Id)); // 拆库后 Id 仅库内唯一，必须带站点
             foreach (var file in files)
             {
                 if (string.IsNullOrWhiteSpace(file.FilePath)) continue;
@@ -725,15 +846,16 @@ public partial class UsersViewModel : StatusViewModel
 
     private async Task RefreshProfilesAsync()
     {
+        var siteId = _rowsSiteId ?? SiteId;
+        var selected = Users.Where(r => r.IsSelected).Select(r => r.Model.Id).ToList();
         try
         {
-            var account = await _accountQuery.GetActiveAsync(SiteId);
+            var account = await _accountQuery.GetActiveAsync(siteId);
             if (account is null)
             {
                 StatusMessage = "请先在设置中导入 Cookie";
                 return;
             }
-            var selected = Users.Where(r => r.IsSelected).Select(r => r.Model.Id).ToList();
             var n = await _users.RefreshProfilesAsync(account, selected.Count > 0 ? selected : null);
             StatusMessage = $"已刷新 {n} 个用户资料";
             await RefreshAsync();
@@ -744,28 +866,53 @@ public partial class UsersViewModel : StatusViewModel
         }
     }
 
+    private void SetSiteStatus(string siteId, string message)
+        => _dispatcher.Post(() => { if (siteId == SiteId) StatusMessage = message; });
+
     private static void OpenExplorerFolder(string path)
         => Process.Start(new ProcessStartInfo { FileName = "explorer.exe", ArgumentList = { path } });
 
     private void OnJobSnapshot(JobSnapshot snapshot)
-        => _dispatcher.Post(ApplyDownloadingState);
+    {
+        var active = snapshot.Status is JobStatus.Pending or JobStatus.Running;
+        var key = (snapshot.SiteId, snapshot.JobId);
+        if (active && !_queue.Active.Any(j => j.SiteId == snapshot.SiteId && j.JobId == snapshot.JobId)) return;
+        if (active)
+        {
+            if (!_jobActivity.TryAdd(key, true)) return;
+        }
+        // 仅首次终态移除已知活动任务；随后的 JobRemoved 不重复刷新，也不累积终态记录。
+        else if (!_jobActivity.TryRemove(key, out _)) return;
+        if (snapshot.UserId is not { } userId || snapshot.SiteId != SiteId) return;
+        _dispatcher.Post(() =>
+        {
+            if (!_listening || snapshot.SiteId != SiteId) return;
+            if (_rowsSiteId == snapshot.SiteId)
+            {
+                var downloading = DownloadingUserIds(snapshot.SiteId).Contains(userId);
+                foreach (var row in Users.Where(r => r.Model.Id == userId)) row.IsDownloading = downloading;
+            }
+            // 下载统计会改变未加载用户的排序位置；立即废弃旧游标和在途页，再合并重载。
+            if (snapshot.Status == JobStatus.Completed) StartDebouncedRefresh();
+        });
+    }
 
-    private HashSet<long> DownloadingUserIds()
+    private HashSet<long> DownloadingUserIds(string? siteId = null)
         => _queue.Active
-            .Where(j => j.UserId is not null && j.Status is JobStatus.Pending or JobStatus.Running)
+            .Where(j => j.SiteId == (siteId ?? SiteId) && j.UserId is not null && j.Status is JobStatus.Pending or JobStatus.Running)
             .Select(j => j.UserId!.Value)
             .ToHashSet();
 
     private void ApplyDownloadingState()
     {
         var downloading = DownloadingUserIds();
-        foreach (var row in Users)
-            row.IsDownloading = downloading.Contains(row.Model.Id);
+        foreach (var row in Users) row.IsDownloading = downloading.Contains(row.Model.Id);
     }
 
-    private void OnAccountInvalid(long accountId, string reason)
+    private void OnAccountInvalid(AccountInvalidNotice notice)
         => _dispatcher.Post(async () =>
         {
+            if (notice.SiteId != SiteId || !_listening) return;
             // 失效提示由主窗口统一弹出（带「去设置」按钮），这里只刷新派生态，避免重复通知覆盖掉该按钮
             try
             {

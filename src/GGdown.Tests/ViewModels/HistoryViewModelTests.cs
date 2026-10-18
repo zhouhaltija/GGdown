@@ -66,6 +66,35 @@ public class HistoryViewModelTests : IDisposable
     // ① 行映射：FileName 取 Path.GetFileName、UserText 空则"账号内容"、SourceUrl 构造、
     //    SizeText 人性化、StatusText 三态、CreatedText 本地时间格式
     [Fact]
+    public void Source_links_use_the_record_site_and_content_kind()
+    {
+        HistoryRowViewModel Row(string site, TargetKind kind) => new(
+            new HistoryRow(1, null, null, "123", "test", null, FileStatus.Downloaded, DateTime.UtcNow, site, kind),
+            _ => Task.CompletedTask, _ => { }, _ => { });
+        Assert.Equal("https://www.pixiv.net/artworks/123", Row("pixiv", TargetKind.UserMedia).SourceUrl);
+        Assert.Equal("https://www.pixiv.net/novel/show.php?id=123", Row("pixiv", TargetKind.UserNovels).SourceUrl);
+        Assert.Equal("https://www.douyin.com/video/123", Row("douyin", TargetKind.Permalink).SourceUrl);
+    }
+
+    [Fact]
+    public async Task Load_more_appends_history_beyond_the_first_page()
+    {
+        _db.Files.AddRange(Enumerable.Range(0, 205).Select(n => new DownloadFile
+        {
+            JobId = _jobId, SiteId = "twitter", FilePath = $"page-{n}.jpg", Url = "test",
+            CreatedAt = new DateTime(2026, 10, 17).AddMinutes(n), Status = FileStatus.Downloaded,
+        }));
+        await _db.SaveChangesAsync();
+        await _vm.RefreshCommand.ExecuteAsync(null);
+        Assert.Equal(200, _vm.Rows.Count);
+        Assert.True(_vm.HasMore);
+        await _vm.LoadMoreCommand.ExecuteAsync(null);
+        Assert.Equal(208, _vm.Rows.Count);
+        Assert.False(_vm.HasMore);
+        Assert.Equal(208, _vm.Rows.Select(r => r.Model.FileId).Distinct().Count());
+    }
+
+    [Fact]
     public async Task Refresh_maps_row_fields()
     {
         await _vm.RefreshCommand.ExecuteAsync(null);

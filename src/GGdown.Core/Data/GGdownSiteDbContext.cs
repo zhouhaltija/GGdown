@@ -22,6 +22,7 @@ public sealed class GGdownSiteDbContext(DbContextOptions<GGdownSiteDbContext> op
         {
             e.Property(a => a.CookiePath).IsRequired();
             e.HasIndex(a => new { a.SiteId, a.IsActive });
+            e.HasIndex(a => a.SiteId).IsUnique().HasFilter("\"IsActive\" = 1");
         });
         b.Entity<User>(e =>
         {
@@ -34,6 +35,7 @@ public sealed class GGdownSiteDbContext(DbContextOptions<GGdownSiteDbContext> op
             e.Property(j => j.SiteId).IsRequired().HasDefaultValue(""); // 默认空串：同连接上的旧模型插入（队列/测试）不写该列不违约
             e.HasIndex(j => j.SiteId); // 跨库恢复/站点筛选的主路径
             e.HasIndex(j => j.Status);
+            e.HasIndex(j => j.StatisticsPending);
             e.HasOne<Account>().WithMany().HasForeignKey(j => j.AccountId);
             e.HasOne<User>().WithMany().HasForeignKey(j => j.UserId);
         });
@@ -42,13 +44,16 @@ public sealed class GGdownSiteDbContext(DbContextOptions<GGdownSiteDbContext> op
             e.Property(f => f.SiteId).IsRequired().HasDefaultValue(""); // 同上
             e.HasIndex(f => f.JobId);
             e.HasIndex(f => f.UserId);
+            e.HasIndex(f => new { f.CreatedAt, f.Id });
+            e.HasIndex(f => new { f.UserId, f.CreatedAt, f.Id });
+            e.HasIndex(f => new { f.JobId, f.EventSequence }).IsUnique().HasFilter("\"EventSequence\" IS NOT NULL");
             e.HasOne<DownloadJob>().WithMany(j => j.Files).HasForeignKey(f => f.JobId); // 控制器裁定：双向导航
         });
         b.Entity<FollowingCacheEntry>(e =>
         {
             e.ToTable("FollowingCache");
-            e.HasIndex(x => new { x.SiteId, x.RestId }).IsUnique();
-            e.HasIndex(x => new { x.SiteId, x.SortOrder });
+            e.HasIndex(x => new { x.SiteId, x.AccountId, x.RestId }).IsUnique();
+            e.HasIndex(x => new { x.SiteId, x.AccountId, x.SortOrder });
         });
         b.Entity<IgnoredFollowingEntry>(e =>
         {

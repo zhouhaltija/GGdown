@@ -7,6 +7,7 @@ namespace GGdown.Sites;
 public sealed partial class DouyinSiteProvider : ISiteProvider
 {
     public const string Id = "douyin";
+    public UserDownloadFeatures UserFeatures => UserDownloadProfiles.Douyin;
 
     [GeneratedRegex(@"^[A-Za-z0-9_-]{8,}$")]
     private static partial Regex SecUserIdRegex();

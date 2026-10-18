@@ -38,7 +38,9 @@ public static class CoreServices
         services.AddScoped<IUserService, UserService>();
         services.AddSingleton<StatsAggregator>(); // T11 落地
         // T10 落地：DownloadQueueService 为 singleton 且只用 IDbContextFactory 访问数据库
-        services.AddSingleton<IDownloadQueueService, DownloadQueueService>();
+        services.AddSingleton<DownloadQueueService>();
+        services.AddSingleton<IDownloadQueueService>(sp => sp.GetRequiredService<DownloadQueueService>());
+        services.AddSingleton<IQueueRecoveryService>(sp => sp.GetRequiredService<DownloadQueueService>());
         // Task B2 落地：查询服务与 AppSettings（brief Step 4 四处注册）。
         // AppSettings 注入 IDbContextFactory（控制器裁定修复 captive dependency），singleton 安全。
         services.AddSingleton<IAppSettings, AppSettings>();

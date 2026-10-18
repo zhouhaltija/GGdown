@@ -8,6 +8,92 @@ import pytest
 import json
 
 
+def test_diagnostic_error_log_does_not_count_as_a_failed_file(tmp_path, monkeypatch, capsys):
+    import logging
+    import runner
+    from argparse import Namespace
+    from gallery_dl import job
+
+    spec = tmp_path / "job.json"
+    spec.write_text(json.dumps({"urls": ["https://example.com/test.jpg"]}), encoding="utf-8")
+
+    def diagnostic_only(self):
+        logging.getLogger("gallery-dl").error("诊断信息，不代表某个文件失败")
+        return 0
+
+    monkeypatch.setattr(job.DownloadJob, "run", diagnostic_only)
+    handlers = list(logging.getLogger().handlers)
+    try:
+        runner.cmd_download(Namespace(site="twitter", cookies="cookies.txt", job=str(spec)))
+    finally:
+        logging.getLogger().handlers[:] = handlers
+    events = [json.loads(line) for line in capsys.readouterr().out.splitlines()]
+    assert events[-1] == {"ev": "job-done", "total": 0, "skipped": 0, "failed": 0}
+
+
+def test_gallery_file_failure_is_structured_and_not_counted_per_log(tmp_path):
+    import subprocess
+    import threading
+    from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+    from pathlib import Path
+
+    class Handler(BaseHTTPRequestHandler):
+        def do_GET(self):
+            if self.path == "/123_1.jpg":
+                self.send_response(404)
+                self.end_headers()
+            else:
+                self.send_response(200)
+                self.send_header("Content-Type", "image/jpeg")
+                self.end_headers()
+                self.wfile.write(b"image-content")
+
+        def log_message(self, *args):
+            pass
+
+    server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    base = f"http://127.0.0.1:{server.server_port}"
+    spec = tmp_path / "job.json"
+    spec.write_text(json.dumps({
+        "urls": [base + "/123_1.jpg", base + "/456_1.jpg"],
+        "options": {"base-directory": str(tmp_path / "files"),
+                    "extractor": {"filename": "{filename}.{extension}", "generic": {"enabled": True}},
+                    "downloader": {"http": {"retries": 0, "validate": False}}},
+    }), encoding="utf-8")
+    try:
+        env = dict(os.environ, ALL_PROXY="", HTTPS_PROXY="", HTTP_PROXY="")
+        result = subprocess.run([sys.executable, str(Path(__file__).resolve().parents[1] / "runner.py"),
+                                 "download", "--cookies", str(tmp_path / "cookies"), "--job", str(spec)],
+                                capture_output=True, text=True, encoding="utf-8", timeout=15, env=env)
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=2)
+    assert result.returncode == 0, result.stderr
+    events = [json.loads(line) for line in result.stdout.splitlines()]
+    failures = [event for event in events if event["ev"] == "file-failed"]
+    assert len(failures) == 1, result.stdout + result.stderr
+    assert failures[0]["path"].endswith("123_1.jpg")
+    assert failures[0]["item_id"] == "123"
+    assert failures[0]["kind"] == "download"
+    assert failures[0]["msg"]
+    assert events[-1] == {"ev": "job-done", "total": 2, "skipped": 0, "failed": 1}
+
+
+def test_gallery_non_file_failure_is_not_reported_as_success(tmp_path, monkeypatch):
+    import runner
+    from argparse import Namespace
+    from gallery_dl import job
+
+    spec = tmp_path / "job.json"
+    spec.write_text(json.dumps({"urls": ["https://example.com/test.jpg"]}), encoding="utf-8")
+    monkeypatch.setattr(job.DownloadJob, "run", lambda self: 1)
+    with pytest.raises(RuntimeError):
+        runner.cmd_download(Namespace(site="twitter", cookies="cookies.txt", job=str(spec)))
+
+
 def test_load_site_twitter():
     mod = load_site("twitter")
     assert hasattr(mod, "whoami")

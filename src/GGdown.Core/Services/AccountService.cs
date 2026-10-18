@@ -39,32 +39,42 @@ public sealed class AccountService(
         var id = Guid.NewGuid().ToString("N");
         var relative = Path.Combine(siteId, id, "cookies.txt");
         var target = Path.Combine(paths.AccountsDir, relative);
-        Directory.CreateDirectory(Path.GetDirectoryName(target)!);
-        File.Copy(cookiesFilePath, target, overwrite: true);
-        if (!string.IsNullOrWhiteSpace(refreshToken))
-            await File.WriteAllTextAsync(Path.Combine(Path.GetDirectoryName(target)!, "refresh-token.txt"),
-                refreshToken.Trim(), ct);
-
-        // 每站点仅一个活动账号：先全部停用（Task 4：本方法持一个站点库上下文贯穿导入写入；
-        // 随后的 VerifyAsync 自开上下文，游离实体经 ExecuteUpdate 落库，见其注释）
-        await using (var db = await siteFactory.CreateAsync(siteId, ct))
+        var stagedDirectory = Path.GetDirectoryName(target)!;
+        Directory.CreateDirectory(stagedDirectory);
+        var committed = false;
+        try
         {
-            await db.Accounts
-                .Where(a => a.SiteId == siteId && a.IsActive)
+            File.Copy(cookiesFilePath, target, overwrite: true);
+            if (!string.IsNullOrWhiteSpace(refreshToken))
+                await File.WriteAllTextAsync(Path.Combine(stagedDirectory, "refresh-token.txt"), refreshToken.Trim(), ct);
+            await using var db = await siteFactory.CreateAsync(siteId, ct);
+            await using var transaction = await db.Database.BeginTransactionAsync(ct);
+            await db.Accounts.Where(a => a.SiteId == siteId && a.IsActive)
                 .ExecuteUpdateAsync(s => s.SetProperty(a => a.IsActive, false), ct);
-
-            var account = new Account
+            db.Accounts.Add(new Account
             {
-                SiteId = siteId,
-                CookiePath = relative,
-                Status = AccountStatus.Unverified,
-                IsActive = true,
-                AddedAt = DateTime.UtcNow,
-            };
-            db.Accounts.Add(account);
+                SiteId = siteId, CookiePath = relative, Status = AccountStatus.Unverified,
+                IsActive = true, AddedAt = DateTime.UtcNow,
+            });
             await db.SaveChangesAsync(ct);
+            await transaction.CommitAsync(ct);
+            committed = true;
         }
-
+        finally
+        {
+            if (!committed)
+            {
+                // 仅清理本次 GUID 目录内已知文件，不触碰旧账号凭据。
+                try
+                {
+                    File.Delete(target);
+                    File.Delete(Path.Combine(stagedDirectory, "refresh-token.txt"));
+                    Directory.Delete(stagedDirectory);
+                }
+                catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+                { log.LogWarning(ex, "清理未提交的账号凭据失败"); }
+            }
+        }
         var imported = await FindByCookieAsync(siteId, relative, ct);
         var verify = await VerifyAsync(imported!, ct);
         return verify.Ok

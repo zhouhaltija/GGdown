@@ -504,7 +504,12 @@ def test_failed_transfer_cleans_partial_file_and_counts_failure(tmp_path):
         },
     }
     asyncio.run(_download_with_client(spec, client, lambda ev, **data: events.append((ev, data))))
-    assert [name for name, _ in events] == ["url-start", "file-start", "log", "job-done"]
+    assert [name for name, _ in events] == ["url-start", "file-start", "file-failed", "job-done"]
+    failure = events[-2][1]
+    assert failure["item_id"] == "1234567890123456789"
+    assert failure["path"].endswith("1234567890123456789_1.mp4")
+    assert failure["kind"] == "download"
+    assert failure["msg"]
     assert events[-1][1]["failed"] == 1
     assert not list((tmp_path / "downloads").rglob("*.part"))
     assert not list((tmp_path / "downloads").rglob("*.mp4"))

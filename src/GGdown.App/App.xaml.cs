@@ -21,7 +21,7 @@ namespace GGdown.App;
 public partial class App : Application
 {
     // 控制器裁定 1（B1 遗漏补齐）：页面代码用 App.Current.Services 解析服务
-    public static App Current => (App)Application.Current;
+    public new static App Current => (App)Application.Current;
 
     // 控制器裁定 2：就绪门——启动任务（建库+恢复）完成后放行，
     // 页面 OnNavigatedTo 中 await App.Readiness 后再触发首刷，避免新机器上首查因缺表失败
@@ -35,6 +35,7 @@ public partial class App : Application
 
     public IServiceProvider Services { get; private set; } = null!;
     private MainWindow? _window;
+    private AppInstanceLock? _instanceLock;
 
     /// <summary>B4：对话框 XamlRoot / Picker 属主句柄的宿主窗口（页面经 App.Current.MainWindow.DialogXamlRoot 取用）。</summary>
     public MainWindow MainWindow => _window!;
@@ -44,12 +45,17 @@ public partial class App : Application
     protected override void OnLaunched(LaunchActivatedEventArgs args)
     {
         var paths = AppPaths.CreateDefault();
+        _instanceLock = AppInstanceLock.TryAcquire(paths.Root);
+        if (_instanceLock is null)
+        {
+            Exit();
+            return;
+        }
         var legacyRoot = Path.Combine(
             Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
             DataRootMigration.LegacyFolderName);
         var migration = DataRootMigration.Apply(legacyRoot, paths.Root);
         paths.EnsureCreated();
-        ApplyRuntimeSeeding(paths);
         Log.Logger = new LoggerConfiguration()
             .MinimumLevel.Information()
             .WriteTo.File(
@@ -74,6 +80,11 @@ public partial class App : Application
             Log.Error(e.Exception, "UI 线程未处理异常：{Message}", e.Message);
             if (!e.Handled) Log.CloseAndFlush();
         };
+        AppDomain.CurrentDomain.UnhandledException += (_, e) =>
+        {
+            Log.Fatal(e.ExceptionObject as Exception, "后台线程未处理异常，应用即将退出");
+            Log.CloseAndFlush();
+        };
 
         var services = new ServiceCollection();
         services.AddLogging(b => b.AddSerilog(dispose: true)); // 必须先于 AddGGdownCore
@@ -95,15 +106,19 @@ public partial class App : Application
         services.AddTransient<ImportViewModel>(); // B4：每次打开对话框取新实例（UserInput/ResultMessage 不串台）
         services.AddTransient<FollowingPickerViewModel>();
         services.AddSingleton<MainNavViewModel>(); // Task 8：主窗口导航 VM（替代 SiteSwitcherViewModel）
-        Services = services.BuildServiceProvider();
+        Services = services.BuildServiceProvider(new ServiceProviderOptions
+        {
+            ValidateScopes = true,
+            ValidateOnBuild = true,
+        });
 
-        ApplyDevEngineOverrides();
-
-        // 启动恢复：遗留 Running/Pending → Failed（后台执行，不阻塞首帧）
+        // 启动恢复：标记中断任务并保留恢复请求（后台执行，不阻塞首帧）。
         _ = Task.Run(async () =>
         {
             try
             {
+                await ApplyRuntimeSeedingAsync(paths);
+                ApplyDevEngineOverrides();
                 using var scope = Services.CreateScope();
                 // Task 6：存量单库拆分（幂等：主库含 Accounts 表才动，先于全局库初始化）
                 var split = await SiteDbSplitMigration.ApplyAsync(paths);
@@ -127,12 +142,16 @@ public partial class App : Application
                 await scope.ServiceProvider.GetRequiredService<StatsAggregator>()
                     .RecalculateDownloadCountsAsync();
             }
-            catch (Exception ex) { Log.Error(ex, "启动恢复失败"); }
+            catch (Exception ex)
+            {
+                Log.Error(ex, "启动恢复失败");
+                _readyTcs.TrySetException(ex); // 恢复失败时页面显示错误，避免在状态不完整的库上继续入队。
+            }
             finally
             {
                 _globalReadyTcs.TrySetResult(); // 前序步骤异常时也放行侧栏
                 _readyTcs.TrySetResult();
-            } // 控制器裁定 2：成功失败都放行就绪门
+            } // 全局导航仍可使用；完整就绪门在启动失败时保留异常，交页面显示错误。
         });
 
         _window = new MainWindow(Services);
@@ -149,56 +168,31 @@ public partial class App : Application
     partial void ApplyDevEngineOverrides();
 
     /// <summary>
-    /// Phase C 首启播种（RELEASE/DEBUG 均生效）：安装版引擎随安装目录分发，
-    /// 而 AppPaths 指向 %LOCALAPPDATA%\GGdown\engine。首次启动时把
-    /// 安装目录 engine（AppContext.BaseDirectory\engine）一次性复制到
-    /// appdata 引擎目录；已存在则跳过（幂等）；失败仅记日志不崩溃。
+    /// 后台安装独立引擎版本，验证后切换指针；保留旧版本供运行中的进程继续使用。
+    /// 更新失败时使用旧版本，无可用引擎时仍允许浏览和管理已有数据。
     /// </summary>
-    private void ApplyRuntimeSeeding(AppPaths paths)
+    private async Task ApplyRuntimeSeedingAsync(AppPaths paths)
     {
         try
         {
-            var bundledEngine = Path.Combine(AppContext.BaseDirectory, "engine");
-            if (!Directory.Exists(bundledEngine))
-                return;
-
-            var bundledVersion = ReadEngineVersion(bundledEngine);
-            var installedVersion = File.Exists(paths.EngineDir) ? ReadEngineVersion(paths.EngineDir) : null;
-            if (File.Exists(paths.PythonExe) && string.Equals(bundledVersion, installedVersion))
-                return;
-
-            Log.Information("首启播种：复制安装目录引擎 {Source} -> {Target}", bundledEngine, paths.EngineDir);
-            CopyDirectory(bundledEngine, paths.EngineDir);
-            Log.Information("首启播种完成");
+#if DEBUG
+            // 开发环境始终使用仓库源码，不安装或探测发行引擎。
+            if (DevEngineLocator.FindRepoRoot(AppContext.BaseDirectory) is not null) return;
+#endif
+            var installation = await new EngineInstaller().InstallAsync(
+                Path.Combine(AppContext.BaseDirectory, "engine"), paths.EngineDir);
+            var options = Services.GetRequiredService<RunnerEngineOptions>();
+            options.PythonExe = Path.Combine(installation.Directory, "python", "python.exe");
+            options.RunnerScript = Path.Combine(installation.Directory, "runner.py");
+            options.GalleryDlPath = Path.Combine(installation.Directory, "site-packages");
+            if (installation.UpdateError is not null)
+                Log.Warning(installation.UpdateError, "引擎更新失败，继续使用 {EngineDirectory}", installation.Directory);
+            else
+                Log.Information("引擎已就绪：{EngineDirectory}，本次安装 {Updated}", installation.Directory, installation.Updated);
         }
         catch (Exception ex)
         {
-            Log.Error(ex, "首启播种失败（不阻断启动）");
-        }
-    }
-
-    private static string? ReadEngineVersion(string engineDir)
-    {
-        try
-        {
-            var versionFile = Path.Combine(engineDir, "engine.json");
-            return File.Exists(versionFile) ? File.ReadAllText(versionFile) : null;
-        }
-        catch
-        {
-            return null;
-        }
-    }
-
-    private static void CopyDirectory(string sourceDir, string targetDir)
-    {
-        Directory.CreateDirectory(targetDir);
-        foreach (var file in Directory.EnumerateFiles(sourceDir, "*", SearchOption.AllDirectories))
-        {
-            var relative = Path.GetRelativePath(sourceDir, file);
-            var target = Path.Combine(targetDir, relative);
-            Directory.CreateDirectory(Path.GetDirectoryName(target)!);
-            File.Copy(file, target, overwrite: true);
+            Log.Error(ex, "引擎安装失败（不阻断启动）");
         }
     }
 }

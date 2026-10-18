@@ -15,7 +15,9 @@ engine/dist/
 cookies.txt
 docs/cookies.txt
 docs/*_cookies.txt
-docs/superpowers
+# docs 仅允许提交 superpowers 子目录，其余内容保留在本机。
+/docs/*
+!/docs/superpowers/
 x.md
 # 外部源码快照（gallery-dl / TikTokDownloader 等），不入库
 third_party/

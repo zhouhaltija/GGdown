@@ -77,24 +77,26 @@ public partial class ImportViewModel : ObservableObject
 
     public async Task<bool> AddUserAsync(CancellationToken ct = default)
     {
-        var account = await _accountQuery.GetActiveAsync(SiteId, ct);
+        var siteId = SiteId;
+        var input = UserInput?.Trim() ?? "";
+        if (!_currentSite.IsAvailable || !_sites.IsRegistered(siteId)) return false;
+        var parsed = _sites.Get(siteId).ParseInput(input);
+        if (!parsed.Ok) { UserInputError = parsed.Error; return false; }
+        var account = await _accountQuery.GetActiveAsync(siteId, ct);
         if (account is null)
         {
             ResultMessage = "请先导入 Cookie";
             return false;
         }
-        ValidateUserInput(); // 双保险：AddUserAsync 自身入口也拦截非法输入
-        if (UserInputError is not null) return false;
         try
         {
             IsBusy = true;
-            var parsed = _sites.Get(SiteId).ParseInput(UserInput!.Trim());
-            var isDouyinWork = SiteId == DouyinSiteProvider.Id && parsed.Kind == PasteKind.Work
+            var isDouyinWork = siteId == DouyinSiteProvider.Id && parsed.Kind == PasteKind.Work
                 && parsed.DirectUrl?.StartsWith("https://v.douyin.com/", StringComparison.Ordinal) != true;
             if (parsed.Kind is PasteKind.Tweet or PasteKind.List or PasteKind.Search || isDouyinWork)
             {
                 var dir = await _settings.GetDownloadDirectoryAsync(ct);
-                var siteOptions = await _settings.GetSiteOptionsAsync(SiteId, ct);
+                var siteOptions = await _settings.GetSiteOptionsAsync(siteId, ct);
                 var kind = parsed.Kind == PasteKind.Search ? ContentKind.Search : ContentKind.Permalink;
                 var title = parsed.Kind switch
                 {
@@ -105,12 +107,12 @@ public partial class ImportViewModel : ObservableObject
                 };
                 await _queue.EnqueuePermalinkAsync(account, parsed.DirectUrl!, title, kind, dir, siteOptions, ct);
                 ResultMessage = $"已加入下载队列：{title}";
-                OnImportSucceeded();
+                OnImportSucceeded(siteId);
                 return true;
             }
-            var user = await _users.AddUserAsync(account, UserInput!.Trim(), ct);
+            var user = await _users.AddUserAsync(account, input, ct);
             ResultMessage = $"已添加用户 @{user.ScreenName}";
-            OnImportSucceeded();
+            OnImportSucceeded(siteId);
             return true;
         }
         catch (Exception ex) // EngineException 等
@@ -124,17 +126,18 @@ public partial class ImportViewModel : ObservableObject
     public async Task<bool> ImportCookiesAsync(string cookiesFilePath, string? refreshToken = null,
         CancellationToken ct = default)
     {
+        var siteId = SiteId;
         try
         {
             IsBusy = true;
-            var result = await _accounts.ImportCookiesAsync(SiteId, cookiesFilePath, refreshToken, ct);
+            var result = await _accounts.ImportCookiesAsync(siteId, cookiesFilePath, refreshToken, ct);
             if (!result.Ok)
             {
                 ResultMessage = result.Error; // "Cookie 无效或已过期，请重新导出"（AccountService.VerifyAsync）
                 return false;
             }
             ResultMessage = $"账号 @{result.Account.ScreenName} 导入成功，可到用户管理页从关注列表选择用户";
-            OnImportSucceeded();
+            OnImportSucceeded(siteId);
             return true;
         }
         catch (Exception ex)
@@ -145,6 +148,6 @@ public partial class ImportViewModel : ObservableObject
         finally { IsBusy = false; }
     }
 
-    private void OnImportSucceeded()
-        => _dispatcher.Post(() => ImportCompleted?.Invoke());
+    private void OnImportSucceeded(string siteId)
+        => _dispatcher.Post(() => { if (siteId == SiteId) ImportCompleted?.Invoke(); });
 }

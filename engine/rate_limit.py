@@ -6,6 +6,8 @@ import sqlite3
 import time
 
 SETTING_KEY = "download.rateLimitBytesPerSecond"
+CONTRACT_VERSION = 1
+MAX_RATE = 1073741824
 
 
 class SharedRateLimiter:
@@ -13,7 +15,15 @@ class SharedRateLimiter:
         self.config = config
         self._state = None
         self._settings = None
-        if config:
+        if config is not None:
+            if not isinstance(config, dict):
+                raise ValueError("限速配置必须是对象")
+            version = config.get("version", 1)  # 兼容未声明版本的旧任务。
+            if type(version) is not int or version != CONTRACT_VERSION:
+                raise ValueError("不支持的限速配置版本")
+            for key in ("settings-db", "state-db"):
+                if not isinstance(config.get(key), str) or not config[key].strip():
+                    raise ValueError(f"限速配置缺少有效的 {key}")
             uri = Path(config["settings-db"]).resolve().as_uri() + "?mode=ro"
             self._settings = sqlite3.connect(uri, uri=True, timeout=5)
 
@@ -30,7 +40,15 @@ class SharedRateLimiter:
         if self._settings is None:
             return 0
         row = self._settings.execute("SELECT Value FROM Settings WHERE Key = ?", (SETTING_KEY,)).fetchone()
-        return max(0, min(1073741824, int(json.loads(row[0]) or 0))) if row else 0
+        if row is None:
+            return 0
+        try:
+            rate = json.loads(row[0])
+        except (ValueError, TypeError) as error:
+            raise ValueError("限速设置不是有效的 JSON 整数") from error
+        if type(rate) is not int or not 0 <= rate <= MAX_RATE:
+            raise ValueError("限速设置须为 0 到 1073741824 之间的整数")
+        return rate
 
     def _open_state(self):
         path = Path(self.config["state-db"])

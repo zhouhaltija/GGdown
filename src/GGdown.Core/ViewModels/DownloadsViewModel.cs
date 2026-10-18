@@ -21,12 +21,14 @@ public sealed partial class JobCardViewModel : ObservableObject
     public JobCardViewModel(JobSnapshot snapshot, Func<long, Task> cancel)
     {
         JobId = snapshot.JobId;
+        SiteId = snapshot.SiteId;
         _cancel = cancel;
         CancelCommand = new RelayCommand(() => _ = _cancel(JobId));
         Update(snapshot);
     }
 
     public long JobId { get; }
+    public string SiteId { get; }
 
     // —— 以下全部字段由 Update(JobSnapshot) 刷新（Produces："全字段刷新"）——
 
@@ -126,6 +128,7 @@ public sealed partial class JobCardViewModel : ObservableObject
         // 分母回退为已知计数，保持 "N/M · 跳过 X" 文案运行中可读（终态两种取值相同，见适配说明）
         var total = snapshot.Total > 0 ? snapshot.Total : snapshot.Done + snapshot.Skipped + snapshot.Failed;
         ProgressText = $"已完成 {snapshot.Done}/{total} · 跳过 {snapshot.Skipped}";
+        if (snapshot.Failed > 0) ProgressText += $" · 失败 {snapshot.Failed}";
         CurrentFile = snapshot.CurrentFile;
         StatusText = snapshot.Status switch // 控制器裁定 3：状态映射
         {
@@ -134,16 +137,17 @@ public sealed partial class JobCardViewModel : ObservableObject
             JobStatus.Completed => "已完成",
             JobStatus.Canceled => "已取消",
             JobStatus.Failed => "失败",
+            JobStatus.PartialFailed => "部分失败",
             _ => snapshot.Status.ToString(),
         };
-        IsFinished = snapshot.Status is JobStatus.Completed or JobStatus.Canceled or JobStatus.Failed; // 终态（取消按钮随之隐藏，页面 UiConv 转换）
+        IsFinished = snapshot.Status is JobStatus.Completed or JobStatus.Canceled or JobStatus.Failed or JobStatus.PartialFailed; // 终态（取消按钮随之隐藏，页面 UiConv 转换）
         var file = snapshot.CurrentFile;
         var ext = file is null ? "" : Path.GetExtension(file).ToLowerInvariant();
         HasPreview = file is not null
             && File.Exists(file)
             && ext is ".jpg" or ".jpeg" or ".png" or ".gif" or ".webp" or ".bmp";
         PreviewPath = HasPreview ? file : null;
-        IsFailed = snapshot.Status == JobStatus.Failed;
+        IsFailed = snapshot.Status is JobStatus.Failed or JobStatus.PartialFailed;
         ErrorText = IsFailed ? snapshot.Error : null;
         OnPropertyChanged(nameof(HasError));
         OnPropertyChanged(nameof(CanOpenFolder));
@@ -238,7 +242,7 @@ public partial class DownloadsViewModel : StatusViewModel
     private void OnJobFinished(JobSnapshot snapshot)
         => _dispatcher.Post(() =>
         {
-            _finishedAll.RemoveAll(s => s.JobId == snapshot.JobId);
+            _finishedAll.RemoveAll(s => s.JobId == snapshot.JobId && s.SiteId == snapshot.SiteId);
             _finishedAll.Insert(0, snapshot);
             if (_finishedAll.Count > FinishedCap) _finishedAll.RemoveRange(FinishedCap, _finishedAll.Count - FinishedCap);
             RebuildFinished();
@@ -395,7 +399,7 @@ public partial class DownloadsViewModel : StatusViewModel
     private void OnJobRemoved(JobSnapshot snapshot)
         => _dispatcher.Post(() =>
         {
-            if (Jobs.FirstOrDefault(c => c.JobId == snapshot.JobId) is { } card)
+            if (Jobs.FirstOrDefault(c => c.JobId == snapshot.JobId && c.SiteId == snapshot.SiteId) is { } card)
                 Jobs.Remove(card);
             UpdateHasActive();
             JobsChanged?.Invoke();
@@ -404,10 +408,10 @@ public partial class DownloadsViewModel : StatusViewModel
     private void RebuildVisibleJobs()
     {
         var mine = _queue.Active.Where(MatchesFilter).ToList();
-        var ids = mine.Select(s => s.JobId).ToHashSet();
+        var ids = mine.Select(s => (s.SiteId, s.JobId)).ToHashSet();
         for (var i = Jobs.Count - 1; i >= 0; i--)
         {
-            if (!ids.Contains(Jobs[i].JobId))
+            if (!ids.Contains((Jobs[i].SiteId, Jobs[i].JobId)))
                 Jobs.RemoveAt(i);
         }
         foreach (var snapshot in mine)
@@ -418,9 +422,30 @@ public partial class DownloadsViewModel : StatusViewModel
 
     private void AddOrUpdateCard(JobSnapshot snapshot)
     {
+        // 锁外事件可能迟到；显示状态以当前活动集合为准，终态后的旧 Pending 不得复活卡片。
+        var current = _queue.Active.FirstOrDefault(s => s.SiteId == snapshot.SiteId && s.JobId == snapshot.JobId);
+        if (current is null)
+        {
+            if (snapshot.Status is JobStatus.Completed or JobStatus.Canceled or JobStatus.Failed or JobStatus.PartialFailed)
+            {
+                // 终态在移除前回填最后计数，但不为已经移除的任务重新创建卡片。
+                if (Jobs.FirstOrDefault(c => c.JobId == snapshot.JobId && c.SiteId == snapshot.SiteId) is { } ending)
+                {
+                    ending.Update(snapshot);
+                    JobsChanged?.Invoke();
+                }
+                return;
+            }
+            if (Jobs.FirstOrDefault(c => c.JobId == snapshot.JobId && c.SiteId == snapshot.SiteId) is { } stale)
+                Jobs.Remove(stale);
+            UpdateHasActive();
+            JobsChanged?.Invoke();
+            return;
+        }
+        snapshot = current;
         if (!MatchesFilter(snapshot))
         {
-            if (Jobs.FirstOrDefault(c => c.JobId == snapshot.JobId) is { } stray)
+            if (Jobs.FirstOrDefault(c => c.JobId == snapshot.JobId && c.SiteId == snapshot.SiteId) is { } stray)
             {
                 Jobs.Remove(stray);
                 UpdateHasActive();
@@ -435,10 +460,10 @@ public partial class DownloadsViewModel : StatusViewModel
 
     private void UpsertCard(JobSnapshot snapshot)
     {
-        if (Jobs.FirstOrDefault(c => c.JobId == snapshot.JobId) is { } card)
+        if (Jobs.FirstOrDefault(c => c.JobId == snapshot.JobId && c.SiteId == snapshot.SiteId) is { } card)
             card.Update(snapshot);
         else
-            Jobs.Add(new JobCardViewModel(snapshot, CancelJobAsync));
+            Jobs.Add(new JobCardViewModel(snapshot, id => CancelJobAsync(id, snapshot.SiteId)));
     }
 
     private void UpdateHasActive()
@@ -448,11 +473,11 @@ public partial class DownloadsViewModel : StatusViewModel
     }
 
     // 卡片取消按钮回调（卡片 RelayCommand 内 fire-and-forget），异常落 StatusMessage 不崩线程
-    private async Task CancelJobAsync(long jobId)
+    private async Task CancelJobAsync(long jobId, string siteId)
     {
         try
         {
-            await _queue.CancelAsync(jobId);
+            await _queue.CancelAsync(jobId, siteId: siteId);
         }
         catch (Exception ex)
         {
@@ -462,32 +487,33 @@ public partial class DownloadsViewModel : StatusViewModel
 
     private async Task SearchAsync()
     {
+        var siteId = SiteId;
         if (!SupportsSearch)
         {
-            StatusMessage = ComingSoonMessage;
+            SetSiteStatus(siteId, ComingSoonMessage);
             return;
         }
         var q = SearchQuery?.Trim();
         if (string.IsNullOrEmpty(q))
         {
-            StatusMessage = "请输入搜索内容或链接";
+            SetSiteStatus(siteId, "请输入搜索内容或链接");
             return;
         }
         Account? account;
-        try { account = await _accountQuery.GetActiveAsync(SiteId); }
+        try { account = await _accountQuery.GetActiveAsync(siteId); }
         catch (Exception ex)
         {
-            StatusMessage = $"账号状态获取失败：{ex.Message}";
+            SetSiteStatus(siteId, $"账号状态获取失败：{ex.Message}");
             return;
         }
         if (account is null)
         {
-            StatusMessage = "请先在设置中导入 Cookie";
+            SetSiteStatus(siteId, "请先在设置中导入 Cookie");
             return;
         }
         try
         {
-            var provider = _sites.Get(SiteId);
+            var provider = _sites.Get(siteId);
             var parsed = provider.ParseInput(q);
             string url;
             string title;
@@ -509,45 +535,46 @@ public partial class DownloadsViewModel : StatusViewModel
                 title = q.Length > 24 ? "搜索 " + q[..24] + "…" : "搜索 " + q;
             }
             var dir = await _settings.GetDownloadDirectoryAsync();
-            var siteOptions = await _settings.GetSiteOptionsAsync(SiteId);
+            var siteOptions = await _settings.GetSiteOptionsAsync(siteId);
             await _queue.EnqueuePermalinkAsync(account, url, title, kind, dir, siteOptions);
-            SearchQuery = null; // 入队成功清空输入，便于连续粘贴下一条
-            StatusMessage = $"已加入下载队列：{title}";
+            if (SiteId == siteId && SearchQuery?.Trim() == q) SearchQuery = null; // 入队成功清空输入，便于连续粘贴下一条
+            SetSiteStatus(siteId, $"已加入下载队列：{title}");
         }
         catch (Exception ex)
         {
-            StatusMessage = ex.Message;
+            SetSiteStatus(siteId, ex.Message);
         }
     }
 
     private async Task DownloadPermalinkAsync()
     {
+        var siteId = SiteId;
         if (!SupportsPermalink)
         {
-            StatusMessage = ComingSoonMessage;
+            SetSiteStatus(siteId, ComingSoonMessage);
             return;
         }
 
-        var provider = _sites.Get(SiteId);
+        var provider = _sites.Get(siteId);
         var parsed = provider.ParseInput(PermalinkInput ?? "");
         if (!parsed.Ok || parsed.Kind is not (PasteKind.Tweet or PasteKind.List or PasteKind.Work)
             || string.IsNullOrWhiteSpace(parsed.DirectUrl))
         {
-            StatusMessage = parsed.Error ?? "请输入有效的作品链接";
+            SetSiteStatus(siteId, parsed.Error ?? "请输入有效的作品链接");
             return;
         }
 
         try
         {
-            var account = await _accountQuery.GetActiveAsync(SiteId);
+            var account = await _accountQuery.GetActiveAsync(siteId);
             if (account is null)
             {
-                StatusMessage = "请先在设置中导入 Cookie";
+                SetSiteStatus(siteId, "请先在设置中导入 Cookie");
                 return;
             }
 
             var dir = await _settings.GetDownloadDirectoryAsync();
-            var siteOptions = await _settings.GetSiteOptionsAsync(SiteId);
+            var siteOptions = await _settings.GetSiteOptionsAsync(siteId);
             var title = parsed.Kind switch
             {
                 PasteKind.Work => $"作品 {parsed.RestId ?? "链接"}",
@@ -557,59 +584,67 @@ public partial class DownloadsViewModel : StatusViewModel
             };
             await _queue.EnqueuePermalinkAsync(account, parsed.DirectUrl, title,
                 ContentKind.Permalink, dir, siteOptions);
-            PermalinkInput = null;
-            StatusMessage = $"已加入下载队列：{title}";
+            if (SiteId == siteId) PermalinkInput = null;
+            SetSiteStatus(siteId, $"已加入下载队列：{title}");
         }
         catch (Exception ex)
         {
-            StatusMessage = ex.Message;
+            SetSiteStatus(siteId, ex.Message);
         }
     }
 
     // 控制器裁定 6：解析账号 → IAppSettings 目录与 siteOptions → EnqueueAccountContentAsync
     private async Task DownloadAccountContentAsync(ContentKind kind)
     {
+        var siteId = SiteId;
         if (!_currentSite.IsAvailable)
         {
-            StatusMessage = ComingSoonMessage;
+            SetSiteStatus(siteId, ComingSoonMessage);
             return;
         }
         Account? account;
         try
         {
             // 审查 Minor-1：与 RefreshHasAccountAsync 一致，坏库等异常落 StatusMessage 不崩线程
-            account = await _accountQuery.GetActiveAsync(SiteId);
+            account = await _accountQuery.GetActiveAsync(siteId);
         }
         catch (Exception ex)
         {
-            StatusMessage = $"账号状态获取失败：{ex.Message}";
+            SetSiteStatus(siteId, $"账号状态获取失败：{ex.Message}");
             return;
         }
         if (account is null)
         {
-            StatusMessage = "请先在设置中导入 Cookie";
+            SetSiteStatus(siteId, "请先在设置中导入 Cookie");
             return;
         }
         try
         {
             var dir = await _settings.GetDownloadDirectoryAsync();
-            var siteOptions = await _settings.GetSiteOptionsAsync(SiteId);
+            var siteOptions = await _settings.GetSiteOptionsAsync(siteId);
             await _queue.EnqueueAccountContentAsync(account, kind, dir, siteOptions);
-            StatusMessage = "已加入下载队列";
+            SetSiteStatus(siteId, "已加入下载队列");
         }
         catch (Exception ex) // EngineException 等
         {
-            StatusMessage = ex.Message;
+            SetSiteStatus(siteId, ex.Message);
         }
     }
 
+    private int _accountVersion;
+
+    private void SetSiteStatus(string siteId, string message)
+        => _dispatcher.Post(() => { if (siteId == SiteId) StatusMessage = message; });
+
     private async Task RefreshHasAccountAsync()
     {
+        var siteId = SiteId;
+        var version = ++_accountVersion;
         Account? account = null;
         Exception? error = null;
         try
         {
-            account = await _accountQuery.GetActiveAsync(SiteId);
+            account = await _accountQuery.GetActiveAsync(siteId);
         }
         catch (Exception ex) // 坏库等异常不崩线程（B4 模式）
         {
@@ -617,6 +652,7 @@ public partial class DownloadsViewModel : StatusViewModel
         }
         _dispatcher.Post(() =>
         {
+            if (siteId != SiteId || version != _accountVersion) return;
             HasAccount = error is null && account is not null;
             // 审查 Minor-2：错误提示不覆写已有的操作反馈（StatusMessage 非空时跳过）
             if (error is not null && StatusMessage is null)

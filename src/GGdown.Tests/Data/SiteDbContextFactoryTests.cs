@@ -49,5 +49,49 @@ public class SiteDbContextFactoryTests : IDisposable
         Assert.Equal(["pixiv", "twitter"], f.ExistingSites().OrderBy(x => x).ToArray());
     }
 
+    [Fact]
+    public async Task CreateAsync_retries_initialization_after_cancellation()
+    {
+        var factory = new SiteDbContextFactory(_paths);
+        using var canceled = new CancellationTokenSource();
+        canceled.Cancel();
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => factory.CreateAsync("twitter", canceled.Token));
+
+        await using var retry = await factory.CreateAsync("TWITTER");
+        Assert.Empty(await retry.Users.ToListAsync());
+        await retry.Database.OpenConnectionAsync();
+        using var command = retry.Database.GetDbConnection().CreateCommand();
+        command.CommandText = "PRAGMA journal_mode;";
+        Assert.Equal("wal", await command.ExecuteScalarAsync());
+    }
+
+    [Fact]
+    public async Task CreateAsync_retries_after_database_file_is_repaired()
+    {
+        var file = Path.Combine(_paths.SitesDataDir, "twitter.db");
+        await File.WriteAllTextAsync(file, "损坏的数据库");
+        var factory = new SiteDbContextFactory(_paths);
+        await Assert.ThrowsAnyAsync<Exception>(() => factory.CreateAsync("twitter"));
+        File.Delete(file);
+
+        await using var retry = await factory.CreateAsync("twitter");
+        Assert.Empty(await retry.Users.ToListAsync());
+    }
+
+    [Fact]
+    public async Task Concurrent_first_access_returns_only_migrated_contexts()
+    {
+        var factory = new SiteDbContextFactory(_paths);
+        var start = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var callers = Enumerable.Range(0, 24).Select(async i =>
+        {
+            await start.Task;
+            await using var db = await factory.CreateAsync(i % 2 == 0 ? "twitter" : "TWITTER");
+            Assert.Empty(await db.Users.ToListAsync());
+        }).ToArray();
+        start.SetResult();
+        await Task.WhenAll(callers);
+    }
+
     public void Dispose() => Directory.Delete(_paths.Root, true);
 }

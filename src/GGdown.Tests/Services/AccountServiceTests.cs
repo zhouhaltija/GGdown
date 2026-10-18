@@ -39,6 +39,17 @@ public class AccountServiceTests : IDisposable
     }
 
     [Fact]
+    public async Task Failed_import_preserves_previous_active_account_and_removes_staged_files()
+    {
+        var original = await _svc.ImportCookiesAsync("twitter", MakeCookiesFile());
+        await _t.Item2.Database.ExecuteSqlRawAsync("CREATE TRIGGER reject_account BEFORE INSERT ON Accounts BEGIN SELECT RAISE(ABORT, 'injected failure'); END;");
+        await Assert.ThrowsAnyAsync<Exception>(() => _svc.ImportCookiesAsync("twitter", MakeCookiesFile()));
+        var active = await _t.Item2.Accounts.AsNoTracking().SingleOrDefaultAsync(a => a.IsActive);
+        Assert.Equal(original.Account.Id, active?.Id);
+        Assert.Single(Directory.EnumerateFiles(_paths.AccountsDir, "cookies.txt", SearchOption.AllDirectories));
+    }
+
+    [Fact]
     public async Task Import_copies_file_creates_account_and_verifies()
     {
         _engine.WhoAmI = new AccountInfo("stub_user", "Stub User", "99");

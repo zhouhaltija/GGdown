@@ -10,6 +10,7 @@ using Microsoft.UI.Dispatching;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
 using Microsoft.UI.Xaml.Media;
+using Microsoft.UI.Windowing;
 
 namespace GGdown.App;
 
@@ -37,10 +38,13 @@ public sealed partial class MainWindow : Window
     private readonly DispatcherQueue _dispatcherQueue; // 队列事件自后台线程触发，UI 操作一律 TryEnqueue 到本窗口 UI 线程
     private DispatcherQueueTimer? _autoCloseTimer;     // 通知自动关闭计时器（仅 UI 线程访问）
     private bool _syncing;                             // SyncChrome 回写控件选中态时屏蔽 SelectionChanged 反向驱动
+    private bool _allowClose;
+    private bool _closing;
+    public event Func<CancellationToken, Task>? BeforeCloseAsync;
 
-    // 批次完成汇总：队列排空时一次性提示，而不是每个任务弹一次（仅 UI 线程访问）
-    private int _batchCompleted;
-    private int _batchFailed;
+    // 后台同步收集终态，全部已知任务送达后才把一次汇总投递到 UI。
+    private string? _invalidAccountSiteId;
+    private readonly DownloadBatchTracker _batchTracker;
 
     public MainNavViewModel Nav { get; }
 
@@ -96,10 +100,85 @@ public sealed partial class MainWindow : Window
 
         // 全局通知 + 栏底指示器：应用生命周期订阅、不退订（窗口与应用同生命周期）
         _queue = services.GetRequiredService<IDownloadQueueService>();
+        _batchTracker = new(() => _queue.Active);
         _queue.AccountInvalid += OnAccountInvalid;
         _queue.JobChanged += OnJobChanged;
         _queue.JobRemoved += OnJobRemoved;
+        foreach (var snapshot in _queue.Active) _batchTracker.ObserveChanged(snapshot);
         StatusHub.Published += OnStatusPublished;
+        Closed += OnWindowClosed;
+        AppWindow.Closing += OnAppWindowClosing;
+        ((FrameworkElement)Content).Loaded += OnContentLoaded;
+    }
+
+    private void OnWindowClosed(object sender, WindowEventArgs args)
+    {
+        AppWindow.Closing -= OnAppWindowClosing;
+        Closed -= OnWindowClosed;
+        _queue.AccountInvalid -= OnAccountInvalid;
+        _queue.JobChanged -= OnJobChanged;
+        _queue.JobRemoved -= OnJobRemoved;
+        StatusHub.Published -= OnStatusPublished;
+        StopAutoCloseTimer();
+    }
+
+    private async void OnAppWindowClosing(AppWindow sender, AppWindowClosingEventArgs args)
+    {
+        if (_allowClose) return;
+        args.Cancel = true;
+        if (_closing) return;
+        _closing = true;
+        using var deadline = new CancellationTokenSource(TimeSpan.FromSeconds(3));
+        try
+        {
+            if (BeforeCloseAsync is { } beforeClose)
+                await Task.WhenAll(beforeClose.GetInvocationList().Cast<Func<CancellationToken, Task>>()
+                    .Select(save => save(deadline.Token))).WaitAsync(deadline.Token);
+        }
+        catch (Exception ex) { Serilog.Log.Error(ex, "退出前保存设置失败"); }
+        finally { _allowClose = true; Close(); }
+    }
+
+    private async void OnContentLoaded(object sender, RoutedEventArgs e)
+    {
+        ((FrameworkElement)Content).Loaded -= OnContentLoaded;
+        try
+        {
+            await App.Readiness;
+            var recovery = _services.GetRequiredService<IQueueRecoveryService>();
+            var count = await recovery.GetInterruptedCountAsync();
+            if (count == 0) return;
+            var dialog = new ContentDialog
+            {
+                XamlRoot = App.Current.MainWindow.DialogXamlRoot,
+                Title = "发现中断的下载任务",
+                Content = $"上次退出时有 {count} 个任务尚未完成。是否继续下载？\n\n已完成的文件会按原下载归档跳过；未完成的文件由对应平台的下载引擎续传或重新下载。",
+                PrimaryButtonText = "继续下载",
+                SecondaryButtonText = "放弃恢复",
+                CloseButtonText = "下次再说",
+                DefaultButton = ContentDialogButton.Close,
+            };
+            var choice = await dialog.ShowAsync();
+            if (choice == ContentDialogResult.Primary)
+            {
+                var result = await recovery.ResumeInterruptedAsync();
+                var message = $"已恢复 {result.Resumed} 个下载任务";
+                if (result.Unavailable > 0)
+                    message += $"；{result.Unavailable} 个任务无法恢复，请检查账号凭据或历史记录中的原因，修复后重启可再次恢复保留的任务";
+                ShowNotice(result.Unavailable > 0 ? InfoBarSeverity.Warning : InfoBarSeverity.Success,
+                    message, showGoSettings: result.Unavailable > 0);
+            }
+            else if (choice == ContentDialogResult.Secondary)
+            {
+                await recovery.DiscardInterruptedAsync();
+                ShowNotice(InfoBarSeverity.Informational, "已放弃恢复，下载文件和历史记录已保留", showGoSettings: false);
+            }
+        }
+        catch (Exception ex)
+        {
+            Serilog.Log.Error(ex, "显示或恢复中断任务失败");
+            ShowNotice(InfoBarSeverity.Error, "恢复中断任务失败，已保留恢复信息，请重启后重试", showGoSettings: false);
+        }
     }
 
     // —— 导航 ——
@@ -251,33 +330,33 @@ public sealed partial class MainWindow : Window
             ShowNotice(severity, message, showGoSettings: false, autoCloseSeconds: seconds);
         });
 
-    private void OnAccountInvalid(long accountId, string reason)
-        => _dispatcherQueue.TryEnqueue(() => ShowNotice(
-            InfoBarSeverity.Error,
-            $"登录态失效，请重新导入 Cookie：{reason}",
-            showGoSettings: true)); // 错误通知不自动关闭，须人工处置/关闭
+    private void OnAccountInvalid(AccountInvalidNotice notice)
+        => _dispatcherQueue.TryEnqueue(() =>
+        {
+            _invalidAccountSiteId = notice.SiteId;
+            ShowNotice(InfoBarSeverity.Error,
+                $"{SiteCatalog.Get(notice.SiteId).DisplayName} 登录态失效，请重新导入 Cookie：{notice.Reason}",
+                showGoSettings: true);
+        });
 
-    private void OnJobChanged(JobSnapshot snapshot) => UpdateActiveCountBadge();
+    private void OnJobChanged(JobSnapshot snapshot)
+    {
+        _batchTracker.ObserveChanged(snapshot);
+        UpdateActiveCountBadge();
+    }
 
     private void OnJobRemoved(JobSnapshot snapshot)
     {
-        var remaining = _queue.Active.Count(s => s.Status is JobStatus.Running or JobStatus.Pending);
-        _dispatcherQueue.TryEnqueue(() =>
+        var summary = _batchTracker.ObserveRemoved(snapshot);
+        if (summary is { ShouldNotify: true }) _dispatcherQueue.TryEnqueue(() =>
         {
-            if (snapshot.Status == JobStatus.Completed) _batchCompleted++;
-            else if (snapshot.Status == JobStatus.Failed) _batchFailed++;
-            if (remaining > 0) return;
-            // 队列排空：汇总一次，避免批量下载时每个任务弹一条
-            var (done, failed) = (_batchCompleted, _batchFailed);
-            _batchCompleted = _batchFailed = 0;
-            if (done == 0 && failed == 0) return; // 只有取消的任务：无需提示
-            if (failed > 0)
+            if (summary.HasFailures)
                 ShowNotice(InfoBarSeverity.Warning,
-                    $"下载结束：完成 {done} 个，失败 {failed} 个。失败原因见「下载」页的最近完成",
+                    $"下载结束：完成 {summary.Completed} 个，部分失败 {summary.PartialFailed} 个，失败 {summary.Failed} 个。失败原因见「下载」页的最近完成",
                     showGoSettings: false, autoCloseSeconds: 8);
             else
                 ShowNotice(InfoBarSeverity.Success,
-                    done == 1 ? $"任务完成：{snapshot.Title}" : $"全部 {done} 个任务已完成",
+                    summary.Completed == 1 ? $"任务完成：{summary.CompletedTitle}" : $"全部 {summary.Completed} 个任务已完成",
                     showGoSettings: false, autoCloseSeconds: 5);
         });
         UpdateActiveCountBadge();
@@ -341,8 +420,7 @@ public sealed partial class MainWindow : Window
         try
         {
             // 登录态失效发生在平台上下文内：跳该平台的「账号与选项」页，并同步侧栏/标签高亮
-            var siteId = Nav.Platforms.FirstOrDefault(p => p.IsSelected)?.SiteId
-                ?? _services.GetRequiredService<ICurrentSite>().SiteId;
+            var siteId = _invalidAccountSiteId ?? _services.GetRequiredService<ICurrentSite>().SiteId;
             await GoToSitePageAsync(siteId, SitePageKey.SiteSettings);
         }
         catch (Exception ex) { Serilog.Log.Error(ex, "跳转平台设置失败"); }

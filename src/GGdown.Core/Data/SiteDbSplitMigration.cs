@@ -46,6 +46,11 @@ public static class SiteDbSplitMigration
         File.Copy(main, backup, overwrite: true); // 搬移期间主库不可读时的人工恢复点
 
         var accounts = await legacy.Accounts.AsNoTracking().ToListAsync(ct);
+        foreach (var group in accounts.Where(a => a.IsActive).GroupBy(a => a.SiteId, StringComparer.OrdinalIgnoreCase))
+        {
+            var latest = group.MaxBy(a => a.Id)!;
+            foreach (var account in group) account.IsActive = account.Id == latest.Id;
+        }
         var accountSite = accounts.ToDictionary(a => a.Id, a => a.SiteId);
 
         // 站点集合：账号/用户/关注缓存出现的站点并集

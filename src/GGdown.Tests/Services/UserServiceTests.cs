@@ -44,6 +44,27 @@ public class UserServiceTests : IDisposable
     }
 
     [Fact]
+    public async Task Following_cache_is_isolated_between_login_accounts()
+    {
+        var other = new Account { SiteId = "twitter", CookiePath = "other" };
+        _t.Item2.Accounts.Add(other);
+        await _t.Item2.SaveChangesAsync();
+        await _svc.SaveFollowingCacheAsync(_account, [new("1", "alice", null, null)]);
+        Assert.Null(await _svc.GetFollowingCacheAsync(other));
+        await _svc.SaveFollowingCacheAsync(other, [new("2", "bob", null, null)]);
+        Assert.Equal("alice", Assert.Single((await _svc.GetFollowingCacheAsync(_account))!.Users).ScreenName);
+    }
+
+    [Fact]
+    public async Task Failed_cache_replacement_keeps_previous_cache()
+    {
+        await _svc.SaveFollowingCacheAsync(_account, [new("1", "alice", null, null)]);
+        await _t.Item2.Database.ExecuteSqlRawAsync("CREATE TRIGGER reject_cache BEFORE INSERT ON FollowingCache BEGIN SELECT RAISE(ABORT, 'injected failure'); END;");
+        await Assert.ThrowsAnyAsync<Exception>(() => _svc.SaveFollowingCacheAsync(_account, [new("2", "bob", null, null)]));
+        Assert.Equal("alice", Assert.Single((await _svc.GetFollowingCacheAsync(_account))!.Users).ScreenName);
+    }
+
+    [Fact]
     public async Task Following_cache_roundtrip_replaces_previous()
     {
         Assert.Null(await _svc.GetFollowingCacheAsync(_account));

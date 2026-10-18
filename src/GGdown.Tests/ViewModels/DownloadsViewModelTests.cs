@@ -160,6 +160,35 @@ public class DownloadsViewModelTests : IDisposable
 
     // ① 入队后卡片出现（Title/KindBadge 正确：用户媒体/账号喜欢/账号书签）
     [Fact]
+    public async Task Late_pending_notification_cannot_recreate_a_canceled_card()
+    {
+        using var pendingEntered = new ManualResetEventSlim();
+        using var releasePending = new ManualResetEventSlim();
+        var sites = new SiteRegistry([new TwitterSiteProvider()]);
+        var queue = CreateQueue(sites);
+        long jobId = 0;
+        queue.JobChanged += s =>
+        {
+            if (s.Status != JobStatus.Pending) return;
+            jobId = s.JobId;
+            pendingEntered.Set();
+            releasePending.Wait(TimeSpan.FromSeconds(10));
+        };
+        var vm = TrackVm(new DownloadsViewModel(queue, new AccountQueryService(_siteFactory), _settings,
+            new SyncDispatcher(), _site, sites));
+        vm.Start();
+        var enqueue = Task.Run(() => queue.EnqueueUserMediaAsync(_account, [_alice], _paths.TempDir, Opts()));
+        try
+        {
+            Assert.True(pendingEntered.Wait(TimeSpan.FromSeconds(5)));
+            await queue.CancelAsync(jobId, siteId: "twitter");
+        }
+        finally { releasePending.Set(); await enqueue; }
+        Assert.Empty(queue.Active);
+        Assert.Empty(vm.Jobs);
+    }
+
+    [Fact]
     public async Task Enqueue_creates_cards_with_title_and_kind_badge()
     {
         var gate = CreateGate();

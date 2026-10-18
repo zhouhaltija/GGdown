@@ -31,6 +31,9 @@ public sealed class GGdownDbContext(DbContextOptions<GGdownDbContext> options) :
         {
             // 旧库无 SiteId 列（拆分迁移只读不写旧库），显式忽略以防误映射
             e.Ignore(j => j.SiteId);
+            e.Ignore(j => j.RecoveryData);
+            e.Ignore(j => j.StatisticsPending);
+            e.Ignore(j => j.MediaCountSnapshot);
             e.HasIndex(j => j.Status);
             e.HasOne<Account>().WithMany().HasForeignKey(j => j.AccountId);
             e.HasOne<User>().WithMany().HasForeignKey(j => j.UserId);
@@ -39,6 +42,7 @@ public sealed class GGdownDbContext(DbContextOptions<GGdownDbContext> options) :
         {
             // 旧库无 SiteId 列（同上）
             e.Ignore(f => f.SiteId);
+            e.Ignore(f => f.EventSequence);
             e.HasIndex(f => f.JobId);
             e.HasIndex(f => f.UserId);
             e.HasOne<DownloadJob>().WithMany(j => j.Files).HasForeignKey(f => f.JobId); // 控制器裁定：双向导航
@@ -46,6 +50,7 @@ public sealed class GGdownDbContext(DbContextOptions<GGdownDbContext> options) :
         b.Entity<SettingEntry>(e => e.HasKey(s => s.Key));
         b.Entity<FollowingCacheEntry>(e =>
         {
+            e.Ignore(x => x.AccountId);
             e.ToTable("FollowingCache");
             e.HasIndex(x => new { x.SiteId, x.RestId }).IsUnique();
             e.HasIndex(x => new { x.SiteId, x.SortOrder });

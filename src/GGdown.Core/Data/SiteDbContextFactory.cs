@@ -20,25 +20,45 @@ public interface ISiteDbContextFactory
 /// </summary>
 public sealed class SiteDbContextFactory(IAppPaths paths) : ISiteDbContextFactory
 {
-    private readonly ConcurrentDictionary<string, byte> _created = new(StringComparer.OrdinalIgnoreCase);
+    private sealed class Initialization
+    {
+        public readonly SemaphoreSlim Gate = new(1, 1);
+        public bool Ready;
+    }
+
+    private readonly ConcurrentDictionary<string, Initialization> _initialization = new(StringComparer.OrdinalIgnoreCase);
 
     public async Task<GGdownSiteDbContext> CreateAsync(string siteId, CancellationToken ct = default)
     {
+        ct.ThrowIfCancellationRequested();
         var dir = paths.SitesDataDir;
         Directory.CreateDirectory(dir);
         var file = Path.Combine(dir, $"{siteId.ToLowerInvariant()}.db");
-        var db = New(file);
-        if (_created.TryAdd(siteId, 0))
+        var state = _initialization.GetOrAdd(siteId, _ => new Initialization());
+        await state.Gate.WaitAsync(ct);
+        try
         {
-            await db.Database.MigrateAsync(ct);
-            await db.Database.ExecuteSqlRawAsync("PRAGMA journal_mode=WAL;", ct);
+            if (!state.Ready)
+            {
+                // 初始化上下文与业务上下文分开；失败或取消时释放连接，下一位调用者可重试。
+                await using var initializationDb = New(file);
+                await initializationDb.Database.MigrateAsync(ct);
+                await initializationDb.Database.ExecuteSqlRawAsync("PRAGMA journal_mode=WAL;", ct);
+                ct.ThrowIfCancellationRequested();
+                state.Ready = true;
+            }
         }
-        return db;
+        finally
+        {
+            state.Gate.Release();
+        }
+        ct.ThrowIfCancellationRequested();
+        return New(file);
     }
 
     public IReadOnlyList<string> ExistingSites() =>
         Directory.Exists(paths.SitesDataDir)
-            ? [.. Directory.EnumerateFiles(paths.SitesDataDir, "*.db").Select(Path.GetFileNameWithoutExtension)]
+            ? [.. Directory.EnumerateFiles(paths.SitesDataDir, "*.db").Select(file => Path.GetFileNameWithoutExtension(file)!)]
             : [];
 
     private static GGdownSiteDbContext New(string file) => new(

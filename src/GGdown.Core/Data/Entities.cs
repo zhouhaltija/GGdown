@@ -5,10 +5,10 @@ public enum UserSource { Following, Manual, Link }
 public enum UserContentSelection { All, PixivArtworks, PixivNovels, DouyinVideos, DouyinGalleries }
 public enum TargetKind
 {
-    UserMedia, AccountLikes, AccountBookmarks, UserNovels, AccountNovelBookmarks,
-    UserHighlights, Permalink, Search,
+    UserMedia = 0, AccountLikes = 1, AccountBookmarks = 2, UserNovels = 3, AccountNovelBookmarks = 4,
+    UserHighlights = 5, Permalink = 6, Search = 7,
 }
-public enum JobStatus { Pending, Running, Completed, Failed, Canceled }
+public enum JobStatus { Pending = 0, Running = 1, Completed = 2, Failed = 3, Canceled = 4, PartialFailed = 5 }
 public enum FileStatus { Downloaded, Skipped, Failed }
 
 public sealed class Account
@@ -69,12 +69,17 @@ public sealed class DownloadJob
     public DateTime CreatedAt { get; set; }
     public DateTime? StartedAt { get; set; }
     public DateTime? FinishedAt { get; set; }
+    // 任务入队时与任务行一并提交；只保存请求参数和凭据路径，不复制 Cookie 内容。
+    public string? RecoveryData { get; set; }
+    public bool StatisticsPending { get; set; }
+    public long? MediaCountSnapshot { get; set; }
     public List<DownloadFile> Files { get; set; } = []; // 控制器裁定：Task 10 测试使用 Include(j => j.Files)
 }
 
 public sealed class DownloadFile
 {
     public long Id { get; set; }
+    public long? EventSequence { get; set; }
     // 与所属 Job 同站点（经 JobId 回填）；旧 GGdownDbContext 忽略该列
     public string SiteId { get; set; } = string.Empty;
     public long JobId { get; set; }
@@ -101,6 +106,7 @@ public sealed class FollowingCacheEntry
 {
     public long Id { get; set; }
     public string SiteId { get; set; } = string.Empty;
+    public long? AccountId { get; set; }
     public string RestId { get; set; } = string.Empty;
     public string ScreenName { get; set; } = string.Empty;
     public string? DisplayName { get; set; }

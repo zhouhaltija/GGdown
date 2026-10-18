@@ -69,6 +69,7 @@ public partial class FollowingPickerViewModel : ObservableObject
     private readonly List<FollowingRowViewModel> _all = [];
     private HashSet<string> _ignoredIds = new(StringComparer.Ordinal);
     private Account? _activeAccount;
+    private int _loadVersion;
 
     private string SiteId => _currentSite.SiteId;
 
@@ -108,7 +109,11 @@ public partial class FollowingPickerViewModel : ObservableObject
 
     public async Task<bool> LoadAsync(CancellationToken ct = default)
     {
-        var account = await _accountQuery.GetActiveAsync(SiteId, ct);
+        var siteId = SiteId;
+        var version = ++_loadVersion;
+        bool IsCurrent() => version == _loadVersion && siteId == SiteId && !ct.IsCancellationRequested;
+        var account = await _accountQuery.GetActiveAsync(siteId, ct);
+        if (!IsCurrent()) return false;
         if (account is null)
         {
             ResultMessage = "请先导入 Cookie";
@@ -119,10 +124,11 @@ public partial class FollowingPickerViewModel : ObservableObject
         HashSet<string> addedIds;
         try
         {
-            var existing = await _userQuery.ListAsync(SiteId, new UserFilter(), ct);
+            var existing = await _userQuery.ListAsync(siteId, new UserFilter(), ct);
             addedIds = existing.Select(u => u.RestId).ToHashSet(StringComparer.Ordinal);
             var ignored = await _users.GetIgnoredFollowingIdsAsync(account, ct);
-            if (_activeAccount?.Id != account.Id)
+            if (!IsCurrent()) return false;
+            if (_activeAccount?.Id != account.Id || _activeAccount?.SiteId != account.SiteId)
                 _all.Clear();
             _activeAccount = account;
             _ignoredIds = ignored.ToHashSet(StringComparer.Ordinal);
@@ -140,6 +146,7 @@ public partial class FollowingPickerViewModel : ObservableObject
         {
             _dispatcher.Post(() =>
             {
+                if (!IsCurrent()) return;
                 if (!DisplayedEquals(cache!.Users))
                     ShowFollowing(cache.Users, addedIds);
                 StatusText = "正在刷新关注列表…";
@@ -161,6 +168,7 @@ public partial class FollowingPickerViewModel : ObservableObject
             await _users.SaveFollowingCacheAsync(account, ordered, ct);
             _dispatcher.Post(() =>
             {
+                if (!IsCurrent()) return;
                 if (!DisplayedEquals(ordered))
                     ShowFollowing(ordered, addedIds);
                 StatusText = FormatStatus(ordered.Count, newCount, _all.Count(r => r.AlreadyAdded));
@@ -170,6 +178,7 @@ public partial class FollowingPickerViewModel : ObservableObject
         }
         catch (Exception ex)
         {
+            if (!IsCurrent()) return false;
             if (hasCache)
             {
                 StatusText = "刷新失败，显示上次保存的列表";
@@ -193,7 +202,7 @@ public partial class FollowingPickerViewModel : ObservableObject
             ResultMessage = "请选择要添加的用户";
             return false;
         }
-        var account = await _accountQuery.GetActiveAsync(SiteId, ct);
+        var account = _activeAccount;
         if (account is null)
         {
             ResultMessage = "请先导入 Cookie";
@@ -204,7 +213,7 @@ public partial class FollowingPickerViewModel : ObservableObject
             IsBusy = true;
             var added = await _users.AddFollowingUsersAsync(account, selected, ct);
             ResultMessage = $"已添加 {added} 个用户";
-            _dispatcher.Post(() => ImportCompleted?.Invoke());
+            _dispatcher.Post(() => { if (account.SiteId == SiteId) ImportCompleted?.Invoke(); });
             return true;
         }
         catch (Exception ex)

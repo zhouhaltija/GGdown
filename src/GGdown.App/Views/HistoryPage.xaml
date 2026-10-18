@@ -99,5 +99,8 @@
                 </DataTemplate>
             </ListView.ItemTemplate>
         </ListView>
+        <Button Grid.Row="2" Content="加载更多" Command="{x:Bind Vm.LoadMoreCommand}"
+                Visibility="{x:Bind conv:UiConv.ToVisibility(Vm.HasMore), Mode=OneWay}"
+                HorizontalAlignment="Center" Margin="12,8"/>
     </Grid>
 </Page>

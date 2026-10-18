@@ -54,6 +54,10 @@ namespace GGdown.Core.Migrations.Sites
 
                     b.HasKey("Id");
 
+                    b.HasIndex("SiteId")
+                        .IsUnique()
+                        .HasFilter("\"IsActive\" = 1");
+
                     b.HasIndex("SiteId", "IsActive");
 
                     b.ToTable("Accounts");
@@ -67,6 +71,9 @@ namespace GGdown.Core.Migrations.Sites
 
                     b.Property<DateTime>("CreatedAt")
                         .HasColumnType("TEXT");
+
+                    b.Property<long?>("EventSequence")
+                        .HasColumnType("INTEGER");
 
                     b.Property<string>("FilePath")
                         .IsRequired()
@@ -103,6 +110,14 @@ namespace GGdown.Core.Migrations.Sites
 
                     b.HasIndex("UserId");
 
+                    b.HasIndex("CreatedAt", "Id");
+
+                    b.HasIndex("JobId", "EventSequence")
+                        .IsUnique()
+                        .HasFilter("\"EventSequence\" IS NOT NULL");
+
+                    b.HasIndex("UserId", "CreatedAt", "Id");
+
                     b.ToTable("Files");
                 });
 
@@ -130,6 +145,12 @@ namespace GGdown.Core.Migrations.Sites
                     b.Property<DateTime?>("FinishedAt")
                         .HasColumnType("TEXT");
 
+                    b.Property<long?>("MediaCountSnapshot")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<string>("RecoveryData")
+                        .HasColumnType("TEXT");
+
                     b.Property<string>("SiteId")
                         .IsRequired()
                         .ValueGeneratedOnAdd()
@@ -141,6 +162,9 @@ namespace GGdown.Core.Migrations.Sites
 
                     b.Property<DateTime?>("StartedAt")
                         .HasColumnType("TEXT");
+
+                    b.Property<bool>("StatisticsPending")
+                        .HasColumnType("INTEGER");
 
                     b.Property<int>("Status")
                         .HasColumnType("INTEGER");
@@ -160,6 +184,8 @@ namespace GGdown.Core.Migrations.Sites
 
                     b.HasIndex("SiteId");
 
+                    b.HasIndex("StatisticsPending");
+
                     b.HasIndex("Status");
 
                     b.HasIndex("UserId");
@@ -171,6 +197,9 @@ namespace GGdown.Core.Migrations.Sites
                 {
                     b.Property<long>("Id")
                         .ValueGeneratedOnAdd()
+                        .HasColumnType("INTEGER");
+
+                    b.Property<long?>("AccountId")
                         .HasColumnType("INTEGER");
 
                     b.Property<string>("AvatarUrl")
@@ -199,10 +228,10 @@ namespace GGdown.Core.Migrations.Sites
 
                     b.HasKey("Id");
 
-                    b.HasIndex("SiteId", "RestId")
+                    b.HasIndex("SiteId", "AccountId", "RestId")
                         .IsUnique();
 
-                    b.HasIndex("SiteId", "SortOrder");
+                    b.HasIndex("SiteId", "AccountId", "SortOrder");
 
                     b.ToTable("FollowingCache", (string)null);
                 });

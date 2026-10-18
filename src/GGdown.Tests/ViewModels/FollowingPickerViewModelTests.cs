@@ -41,6 +41,45 @@ public class FollowingPickerViewModelTests : IDisposable
     }
 
     [Fact]
+    public async Task Queued_following_load_cannot_populate_another_site()
+    {
+        var site = new FakeCurrentSite();
+        var sites = new SiteRegistry([new TwitterSiteProvider()]);
+        var factory = new SingleSiteDbContextFactory(_db);
+        var dispatcher = new BufferedDispatcher();
+        var vm = new FollowingPickerViewModel(
+            new UserService(factory, _engine, _paths, sites, NullLogger<UserService>.Instance),
+            new UserQueryService(factory), new AccountQueryService(factory), dispatcher, site);
+        Assert.True(await vm.LoadAsync());
+        await site.SelectAsync("pixiv");
+        dispatcher.Drain();
+        Assert.Empty(vm.VisibleItems);
+    }
+
+    private sealed class BufferedDispatcher : IUiDispatcher
+    {
+        private readonly Queue<Action> _actions = new();
+        public void Post(Action action) => _actions.Enqueue(action);
+        public void Drain() { while (_actions.TryDequeue(out var action)) action(); }
+    }
+
+    [Fact]
+    public async Task AddSelected_keeps_displayed_account_after_switching_platform()
+    {
+        var site = new FakeCurrentSite();
+        var sites = new SiteRegistry([new TwitterSiteProvider()]);
+        var factory = new SingleSiteDbContextFactory(_db);
+        var vm = new FollowingPickerViewModel(
+            new UserService(factory, _engine, _paths, sites, NullLogger<UserService>.Instance),
+            new UserQueryService(factory), new AccountQueryService(factory), new SyncDispatcher(), site);
+        Assert.True(await vm.LoadAsync());
+        vm.VisibleItems.Single(r => r.Info.ScreenName == "bob").IsSelected = true;
+        await site.SelectAsync("pixiv");
+        Assert.True(await vm.AddSelectedAsync());
+        Assert.Equal("twitter", Assert.Single(_db.Users).SiteId);
+    }
+
+    [Fact]
     public async Task Load_without_account_is_blocked()
     {
         await _db.Accounts.ExecuteDeleteAsync();

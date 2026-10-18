@@ -33,10 +33,7 @@ public class UsersPageXamlTests
     public void Toolbar_has_select_all_deselect_and_invert_buttons()
     {
         var xaml = File.ReadAllText(Path.Combine(AppContext.BaseDirectory, "XamlFixtures", "UsersPage.xaml"));
-        // 全选/取消全选/反选收进「选择」下拉菜单
-        Assert.Contains("Text=\"全选\"", xaml);
-        Assert.Contains("Text=\"取消全选\"", xaml);
-        Assert.Contains("Text=\"反选\"", xaml);
+        // 保留选择命令入口；实际作用范围由分页 VM 回归验证，不固定菜单文案。
         Assert.Contains("SelectAllCommand", xaml);
         Assert.Contains("DeselectAllCommand", xaml);
         Assert.Contains("InvertSelectionCommand", xaml);

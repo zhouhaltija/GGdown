@@ -15,6 +15,16 @@ public interface IDownloadEngine
     Task<IReadOnlyList<SiteUserInfo>> ListFollowingAsync(string siteId, string cookiesFile, CancellationToken ct = default);
     Task<SiteUserInfo> GetUserInfoAsync(string siteId, string cookiesFile, string input, CancellationToken ct = default);
     Task DownloadAsync(DownloadPlan plan, string cookiesFile, IProgress<EngineEvent> progress, CancellationToken ct = default);
+    // 兼容同步适配器；真实进程实现直接 await 接收器，为文件写入提供背压。
+    Task DownloadWithEventsAsync(DownloadPlan plan, string cookiesFile,
+        Func<EngineEvent, CancellationToken, ValueTask> onEvent, CancellationToken ct = default) =>
+        Task.Run(() => DownloadAsync(plan, cookiesFile, new AwaitedEventProgress(onEvent, ct), ct), ct);
+}
+
+internal sealed class AwaitedEventProgress(Func<EngineEvent, CancellationToken, ValueTask> onEvent,
+    CancellationToken ct) : IProgress<EngineEvent>
+{
+    public void Report(EngineEvent value) => onEvent(value, ct).AsTask().GetAwaiter().GetResult();
 }
 
 public class EngineException(string message, string? kind = null) : Exception(message)

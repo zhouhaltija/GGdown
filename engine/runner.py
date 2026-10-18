@@ -42,18 +42,34 @@ class EventOutput:
         pass
 
 
-class CountingLogHandler(EventHandler):
-    """ERROR 级 gallery-dl 日志计入 failed：output.NullOutput 接口无失败回调，
-    文件失败只走日志通道，故在 log 桥接处补计。"""
+def create_download_job(base, counters):
+    """在 gallery-dl 的最终文件失败钩子计数，重试日志不代表文件失败。"""
+    failed_paths = set()
 
-    def __init__(self, counters):
-        super().__init__(level=logging.WARNING)
-        self.counters = counters
+    class DownloadJob(base):
+        def initialize(self, *args, **kwargs):
+            super().initialize(*args, **kwargs)
+            self.hooks = dict(self.hooks)
+            self.hooks["error"] = [self.file_failed, *self.hooks.get("error", ())]
 
-    def emit(self, record):
-        if record.levelno >= logging.ERROR:
-            self.counters["failed"] += 1
-        super().emit(record)
+        def file_failed(self, pathfmt):
+            path = pathfmt.path
+            key = os.path.normcase(os.path.abspath(path))
+            if key in failed_paths:
+                return
+            failed_paths.add(key)
+            counters["failed"] += 1
+            match = re.match(r"^(\d+)_", os.path.basename(path))
+            item_id = match.group(1) if match else None
+            if item_id is None:
+                for name in ("tweet_id", "id", "illust_id"):
+                    if pathfmt.kwdict.get(name) is not None:
+                        item_id = str(pathfmt.kwdict[name])
+                        break
+            emit("file-failed", path=path, item_id=item_id,
+                 msg="文件下载失败，详情见引擎诊断", kind="download")
+
+    return DownloadJob
 
 
 def cmd_whoami(args):
@@ -102,14 +118,25 @@ def cmd_download(args):
     apply_options(options)
     config.set(("extractor", args.site), "cookies", args.cookies)  # CLI 参数覆盖，双保险
     counters = {"started": 0, "done": 0, "skipped": 0, "failed": 0}
-    output.select = lambda: EventOutput(counters)
     # gallery-dl 的 logger（"gallery-dl" 及类别名如 "twitter"）均向 root 传播；
     # 按库使用时 setup_logging 不会被触发，root 上无冲突 handler
-    logging.getLogger().addHandler(CountingLogHandler(counters))
-    with SharedRateLimiter(rate_config) as limiter, limit_gallery_downloads(limiter):
-        for url in spec["urls"]:
-            emit("url-start", url=url)
-            job.DownloadJob(url).run()
+    handler = EventHandler(level=logging.WARNING)
+    logging.getLogger().addHandler(handler)
+    original_select = output.select
+    output.select = lambda: EventOutput(counters)
+    download_job = create_download_job(job.DownloadJob, counters)
+    try:
+        with SharedRateLimiter(rate_config) as limiter, limit_gallery_downloads(limiter):
+            for url in spec["urls"]:
+                emit("url-start", url=url)
+                status = download_job(url).run()
+                # run() 返回位标记而非失败文件数；4 表示最终文件下载失败。
+                # 其他提取/格式/网络错误不能在没有完整结果时报告成功。
+                if status and (status & ~4 or counters["failed"] == 0):
+                    raise RuntimeError(f"gallery-dl 未能完成提取（状态码 {status}）")
+    finally:
+        output.select = original_select
+        logging.getLogger().removeHandler(handler)
     total = counters["done"] + counters["skipped"] + counters["failed"]
     emit("job-done", total=total, skipped=counters["skipped"], failed=counters["failed"])
 

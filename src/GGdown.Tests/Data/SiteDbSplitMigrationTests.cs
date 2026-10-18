@@ -35,6 +35,23 @@ public class SiteDbSplitMigrationTests : IDisposable
     }
 
     [Fact]
+    public async Task Split_preserves_accounts_when_legacy_has_multiple_active_accounts()
+    {
+        SeedLegacyDb();
+        var options = new DbContextOptionsBuilder<GGdownDbContext>()
+            .UseSqlite($"Data Source={_paths.DbFile};Pooling=False").Options;
+        using (var legacy = new GGdownDbContext(options))
+        {
+            legacy.Accounts.Add(new Account { SiteId = "twitter", CookiePath = "new", IsActive = true });
+            await legacy.SaveChangesAsync();
+        }
+        await SiteDbSplitMigration.ApplyAsync(_paths);
+        await using var site = await new SiteDbContextFactory(_paths).CreateAsync("twitter");
+        Assert.Equal(2, await site.Accounts.CountAsync());
+        Assert.Equal("new", (await site.Accounts.SingleAsync(a => a.IsActive)).CookiePath);
+    }
+
+    [Fact]
     public async Task Not_needed_when_fresh_install_or_already_split()
     {
         Assert.False(SiteDbSplitMigration.IsNeeded(_paths.DataDir)); // 全新机器：无 ggdown.db

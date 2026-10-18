@@ -16,7 +16,7 @@ namespace GGdown.ViewModels;
 /// 注册为 Transient 且页面 NavigationCacheMode=Enabled（构造函数解析一次，实例与页面同生命周期）——
 /// 依赖 Scoped 的 IAccountService，singleton 会形成 captive dependency（B7 裁定沿用）。
 /// </summary>
-public partial class SiteSettingsViewModel : StatusViewModel
+public partial class SiteSettingsViewModel : StatusViewModel, IDisposable
 {
     private readonly ICurrentSite _currentSite;
     private readonly IAppSettings _settings;
@@ -29,7 +29,7 @@ public partial class SiteSettingsViewModel : StatusViewModel
         SiteRegistry sites, IUiDispatcher dispatcher, ICurrentSite currentSite)
     {
         _currentSite = currentSite;
-        _currentSite.Changed += () => _ = StartAsync(); // 平台切换即重载（共享页面实例，B7 语义保留）
+        _currentSite.Changed += OnSiteChanged;
         _settings = settings;
         _accounts = accounts;
         _accountQuery = accountQuery;
@@ -42,6 +42,40 @@ public partial class SiteSettingsViewModel : StatusViewModel
     }
 
     // —— 账号 ——
+
+    private int _loadVersion;
+    private CancellationTokenSource? _loadCancellation;
+    private string? _optionsSiteId;
+    private bool _listening = true;
+    private readonly Dictionary<string, CancellationTokenSource> _autoSaves = [];
+    private readonly System.Collections.Concurrent.ConcurrentDictionary<string, long> _editVersions = new();
+    private readonly System.Collections.Concurrent.ConcurrentDictionary<string,
+        (long Version, IReadOnlyDictionary<string, object?> Values)> _drafts = new();
+    private readonly SemaphoreSlim _saveGate = new(1, 1);
+
+    private void OnSiteChanged() => _ = StartAsync();
+
+    public void Resume()
+    {
+        if (_listening) return;
+        _listening = true;
+        _currentSite.Changed += OnSiteChanged;
+    }
+
+    public void Stop()
+    {
+        if (!_listening) return;
+        _listening = false;
+        _currentSite.Changed -= OnSiteChanged;
+        ++_loadVersion;
+        _loadCancellation?.Cancel();
+    }
+
+    public void Dispose()
+    {
+        Stop();
+        _loadCancellation?.Dispose();
+    }
 
     private Account? _activeAccount;
     public Account? ActiveAccount { get => _activeAccount; private set => SetProperty(ref _activeAccount, value); } // null → 页面显示导入按钮
@@ -95,17 +129,25 @@ public partial class SiteSettingsViewModel : StatusViewModel
 
     public async Task StartAsync()
     {
+        var siteId = SiteId;
+        var available = _currentSite.IsAvailable;
+        var version = ++_loadVersion;
+        _loadCancellation?.Cancel();
+        _loadCancellation?.Dispose();
+        var ct = (_loadCancellation = new CancellationTokenSource()).Token;
+        bool IsCurrent() => version == _loadVersion && siteId == SiteId && !ct.IsCancellationRequested;
         try
         {
-            var account = _currentSite.IsAvailable ? await _accountQuery.GetActiveAsync(SiteId) : null;
-            var options = _currentSite.IsAvailable && _sites.IsRegistered(SiteId)
-                ? await _settings.GetSiteOptionsAsync(SiteId)
-                : null;
+            var account = available ? await _accountQuery.GetActiveAsync(siteId, ct) : null;
+            var options = available && _sites.IsRegistered(siteId)
+                ? await _settings.GetSiteOptionsAsync(siteId, ct) : null;
             _dispatcher.Post(() =>
             {
+                if (!IsCurrent()) return;
                 SetActiveAccount(account);
+                _optionsSiteId = siteId;
                 if (options is null) SiteOptions.Clear();
-                else RebuildOptions(options);
+                else RebuildOptions(siteId, _drafts.TryGetValue(siteId, out var draft) ? draft.Values : options);
                 OnPropertyChanged(nameof(IsSiteAvailable));
                 OnPropertyChanged(nameof(ShowComingSoon));
                 OnPropertyChanged(nameof(SiteDisplayName));
@@ -115,53 +157,62 @@ public partial class SiteSettingsViewModel : StatusViewModel
                 OnPropertyChanged(nameof(RequiresRefreshToken));
             });
         }
-        catch (Exception ex) // 坏库等异常不崩线程（B5 模式）
+        catch (OperationCanceledException) when (ct.IsCancellationRequested) { }
+        catch (Exception ex)
         {
-            StatusMessage = $"加载账号失败：{ex.Message}";
+            _dispatcher.Post(() => { if (IsCurrent()) StatusMessage = $"加载账号失败：{ex.Message}"; });
         }
     }
 
-    // 按 Schema 字段建行：保存值优先，缺省回退 Schema 默认值
-    private void RebuildOptions(IReadOnlyDictionary<string, object?> options)
+    private void RebuildOptions(string siteId, IReadOnlyDictionary<string, object?> options)
     {
-        var schema = _sites.Get(SiteId).OptionsSchema;
-        _autoSave?.Cancel();
+        var schema = _sites.Get(siteId).OptionsSchema;
         SiteOptions.Clear();
         foreach (var field in schema.Fields)
         {
             options.TryGetValue(field.Key, out var value);
             var item = new OptionItemViewModel(field, value ?? field.Default);
-            item.PropertyChanged += (_, _) => ScheduleAutoSave(); // 改动即保存，与界面设置"勾选即生效"一致
+            item.PropertyChanged += (_, _) => ScheduleAutoSave(siteId);
             SiteOptions.Add(item);
         }
     }
 
-    // —— 自动保存：开关立即生效，文本输入 600ms 防抖后保存（不再需要单独的「保存」按钮）——
-
-    private CancellationTokenSource? _autoSave;
-
-    /// <summary>自动保存防抖时长（测试可调小）。</summary>
     public TimeSpan AutoSaveDelay { get; set; } = TimeSpan.FromMilliseconds(600);
 
-    private void ScheduleAutoSave()
+    private Dictionary<string, object?> CaptureOptions(string siteId)
     {
-        _autoSave?.Cancel();
-        _autoSave?.Dispose();
-        var cts = _autoSave = new CancellationTokenSource();
-        _ = AutoSaveAsync(cts.Token);
+        var byKey = SiteOptions.ToDictionary(o => o.Key);
+        return _sites.Get(siteId).OptionsSchema.Fields.Where(f => byKey.ContainsKey(f.Key))
+            .ToDictionary(f => f.Key, f => byKey[f.Key].ToValue());
     }
 
-    private async Task AutoSaveAsync(CancellationToken ct)
+    private long NextEditVersion(string siteId)
+        => _editVersions[siteId] = _editVersions.GetValueOrDefault(siteId) + 1;
+
+    private void ScheduleAutoSave(string siteId)
+    {
+        if (_optionsSiteId != siteId) return;
+        if (_autoSaves.Remove(siteId, out var previous))
+        {
+            previous.Cancel();
+            previous.Dispose();
+        }
+        var cts = new CancellationTokenSource();
+        _autoSaves[siteId] = cts;
+        var values = CaptureOptions(siteId);
+        var version = NextEditVersion(siteId);
+        _drafts[siteId] = (version, values);
+        _ = AutoSaveAsync(siteId, values, version, cts.Token);
+    }
+
+    private async Task AutoSaveAsync(string siteId, Dictionary<string, object?> values, long version, CancellationToken ct)
     {
         try
         {
             await Task.Delay(AutoSaveDelay, ct);
-            _dispatcher.Post(() => { if (!ct.IsCancellationRequested) _ = SaveOptionsAsync(); });
+            await SaveSnapshotAsync(siteId, values, version);
         }
-        catch (OperationCanceledException)
-        {
-            // 新改动取代了旧的等待
-        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested) { }
     }
 
     private void SetActiveAccount(Account? account)
@@ -176,50 +227,72 @@ public partial class SiteSettingsViewModel : StatusViewModel
     }
 
     // 裁定 3：只保存 Schema 中存在的键，值类型与 DefaultOptions 对齐（bool/string，经 OptionItemViewModel.ToValue）
-    private async Task SaveOptionsAsync()
+    private Task SaveOptionsAsync()
     {
-        if (!_currentSite.IsAvailable || !_sites.IsRegistered(SiteId))
+        var siteId = _optionsSiteId;
+        if (siteId is null || !_sites.IsRegistered(siteId)) return Task.CompletedTask;
+        var values = CaptureOptions(siteId);
+        var version = NextEditVersion(siteId);
+        _drafts[siteId] = (version, values);
+        return SaveSnapshotAsync(siteId, values, version);
+    }
+
+    public async Task FlushPendingSavesAsync(CancellationToken ct = default)
+    {
+        foreach (var cts in _autoSaves.Values) cts.Cancel();
+        var pending = _drafts.Select(d => (SiteId: d.Key, d.Value.Version,
+            Values: new Dictionary<string, object?>(d.Value.Values))).ToArray();
+        // SQLite 的异步 API 也可能同步等待写锁；调用方 UI 只等待后台工作与期限。
+        await Task.Run(async () =>
         {
-            StatusMessage = ComingSoonMessage;
-            return;
-        }
+            foreach (var draft in pending)
+                await SaveSnapshotAsync(draft.SiteId, draft.Values, draft.Version, ct);
+        }, ct).WaitAsync(ct);
+    }
+
+    private async Task SaveSnapshotAsync(string siteId, Dictionary<string, object?> dict, long version,
+        CancellationToken ct = default)
+    {
+        void Report(string message) => _dispatcher.Post(() => { if (siteId == SiteId) StatusMessage = message; });
         try
         {
-            var schema = _sites.Get(SiteId).OptionsSchema;
-            var byKey = SiteOptions.ToDictionary(o => o.Key);
-            var dict = new Dictionary<string, object?>();
-            foreach (var field in schema.Fields)
-                if (byKey.TryGetValue(field.Key, out var item))
-                    dict[field.Key] = item.ToValue();
-            if (SiteId == DouyinSiteProvider.Id && dict.TryGetValue("earliest_date", out var dateValue)
+            if (siteId == DouyinSiteProvider.Id && dict.TryGetValue("earliest_date", out var dateValue)
                 && dateValue is string dateText && !string.IsNullOrWhiteSpace(dateText))
             {
                 if (!DateOnly.TryParseExact(dateText.Trim(), "yyyy-MM-dd", CultureInfo.InvariantCulture,
                         DateTimeStyles.None, out _))
                 {
-                    StatusMessage = "最早发布日期须为 yyyy-MM-dd";
+                    Report("最早发布日期须为 yyyy-MM-dd");
                     return;
                 }
                 dict["earliest_date"] = dateText.Trim();
             }
-            await _settings.SetSiteOptionsAsync(SiteId, dict);
-            StatusMessage = "站点选项已保存";
+            // 保存按请求顺序串行化；已排队的旧版本跳过，在途旧写入完成后才允许新写入。
+            await _saveGate.WaitAsync(ct);
+            try
+            {
+                if (version != _editVersions.GetValueOrDefault(siteId)) return;
+                await _settings.SetSiteOptionsAsync(siteId, dict, ct);
+            }
+            finally { _saveGate.Release(); }
+            Report("站点选项已保存");
         }
-        catch (Exception ex)
-        {
-            StatusMessage = $"保存失败：{ex.Message}";
-        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
+        catch (Exception ex) { Report($"保存失败：{ex.Message}"); }
     }
 
     // 裁定 8：VerifyAsync 原地改写账号 Status → 重发账号派生属性刷新徽标
     private async Task VerifyAccountAsync()
     {
-        if (ActiveAccount is null) return;
+        var account = ActiveAccount;
+        if (account is null) return;
+        var siteId = account.SiteId;
         try
         {
-            var result = await _accounts.VerifyAsync(ActiveAccount);
+            var result = await _accounts.VerifyAsync(account);
+            if (siteId != SiteId || !ReferenceEquals(account, ActiveAccount)) return;
             StatusMessage = result.Ok ? $"账号 {AccountHandle} 验证通过" : (result.Error ?? "验证失败");
-            SetActiveAccount(ActiveAccount);
+            SetActiveAccount(account);
             AccountChanged?.Invoke();
         }
         catch (Exception ex)
@@ -231,14 +304,19 @@ public partial class SiteSettingsViewModel : StatusViewModel
     // 裁定 8：导入/更换 Cookie 共用（页面 ImportCookieDialog 选定 → PendingCookieFile → 本命令）
     private async Task ImportCookieAsync()
     {
-        if (string.IsNullOrEmpty(PendingCookieFile)) return;
+        var siteId = SiteId;
+        var cookieFile = PendingCookieFile;
+        var refreshToken = PendingRefreshToken;
+        if (string.IsNullOrEmpty(cookieFile)) return;
         try
         {
-            var result = await _accounts.ImportCookiesAsync(SiteId, PendingCookieFile, PendingRefreshToken);
+            var result = await _accounts.ImportCookiesAsync(siteId, cookieFile, refreshToken);
+            var account = await _accountQuery.GetActiveAsync(siteId);
+            if (siteId != SiteId) return;
             StatusMessage = result.Ok ? $"账号 @{result.Account.ScreenName} 导入成功" : (result.Error ?? "导入失败");
             PendingCookieFile = null;
             PendingRefreshToken = null;
-            SetActiveAccount(await _accountQuery.GetActiveAsync(SiteId)); // 新账号（含验证失败标记 Invalid 的情况）入卡
+            SetActiveAccount(account); // 新账号（含验证失败标记 Invalid 的情况）入卡
             AccountChanged?.Invoke();
         }
         catch (Exception ex)

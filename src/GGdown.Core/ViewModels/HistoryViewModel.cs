@@ -46,7 +46,7 @@ public sealed partial class HistoryRowViewModel : ObservableObject
     public string UserText => Model.UserScreenName ?? "账号内容";                     // brief：likes/书签文件无用户归属
     public string? SourceUrl => Model.SourceItemId is null
         ? null
-        : $"https://x.com/i/status/{Model.SourceItemId}";                             // brief 定稿构造
+        : SiteSourceLinks.Build(Model.SiteId, Model.Kind, Model.SourceItemId);
     public bool HasSourceUrl => SourceUrl is not null;                                // 行内"查看原文"显隐（页面 UiConv 映射）
     public string SizeText => FormatSize(Model.FileSize);
     public string StatusText => Model.Status switch
@@ -101,6 +101,12 @@ public partial class HistoryViewModel : StatusViewModel
     private readonly IHistoryQueryService _history;
     private readonly IUiDispatcher _dispatcher;
     private int _refreshId; // 并发刷新代数：过期刷新的集合变更丢弃
+    private int _filterLoadId;
+    private CancellationTokenSource? _queryCancellation;
+    private HistoryFilter? _pageFilter;
+    private HistoryCursor? _nextCursor;
+    private bool _isLoading;
+    private const int PageSize = 200;
 
     private string SiteId => _currentSite.SiteId;
 
@@ -121,8 +127,9 @@ public partial class HistoryViewModel : StatusViewModel
         // 字面构造，FilterUsers 走 IHistoryQueryService.ListUsersAsync(SiteId)），故不存储避免 CS0414。
 
         RefreshCommand = new AsyncRelayCommand(RefreshAsync, options: AsyncRelayCommandOptions.AllowConcurrentExecutions);
-        OpenContainingFolderCommand = new AsyncRelayCommand<HistoryRowViewModel>(OpenContainingFolderCoreAsync);
-        OpenSourceCommand = new RelayCommand<HistoryRowViewModel>(OpenSourceCore);
+        LoadMoreCommand = new AsyncRelayCommand(() => LoadPageAsync(false), () => HasMore && !_isLoading);
+        OpenContainingFolderCommand = new AsyncRelayCommand<HistoryRowViewModel>(r => r is null ? Task.CompletedTask : OpenContainingFolderCoreAsync(r));
+        OpenSourceCommand = new RelayCommand<HistoryRowViewModel>(r => { if (r is not null) OpenSourceCore(r); });
         ToggleGalleryCommand = new RelayCommand(() => IsGallery = !IsGallery);
         ClearFiltersCommand = new RelayCommand(() =>
         {
@@ -149,6 +156,9 @@ public partial class HistoryViewModel : StatusViewModel
 
 
     public IAsyncRelayCommand RefreshCommand { get; }
+    public IAsyncRelayCommand LoadMoreCommand { get; }
+    private bool _hasMore;
+    public bool HasMore { get => _hasMore; private set => SetProperty(ref _hasMore, value); }
     // brief 原文声明非泛型 IAsyncRelayCommand，但其注释"参数：HistoryRowViewModel（行内按钮）"要求携带行——
     // 取注释语义（非泛型无法传参）；行内按钮实际绑定行 VM 命令，此为宿主/测试侧 API
     public IAsyncRelayCommand<HistoryRowViewModel> OpenContainingFolderCommand { get; }
@@ -167,40 +177,78 @@ public partial class HistoryViewModel : StatusViewModel
     partial void OnFromDateChanged(DateTimeOffset? value) => _ = RefreshCommand.ExecuteAsync(null);
     partial void OnToDateChanged(DateTimeOffset? value) => _ = RefreshCommand.ExecuteAsync(null);
 
-    private async Task RefreshAsync()
+    private Task RefreshAsync() => LoadPageAsync(true);
+
+    private async Task LoadPageAsync(bool reset)
     {
+        if (!reset && (_isLoading || !HasMore || _pageFilter?.SiteId != SiteId)) return;
+        if (reset)
+        {
+            ++_refreshId;
+            _queryCancellation?.Cancel();
+            _queryCancellation?.Dispose();
+            _queryCancellation = new();
+            _nextCursor = null;
+            _pageFilter = new(SiteId, SelectedUserFilter?.Id, FromDate?.Date, ToDate?.Date.AddDays(1), PageSize: PageSize);
+        }
+        var gen = _refreshId;
+        var filter = _pageFilter! with { Cursor = reset ? null : _nextCursor };
+        var ct = _queryCancellation!.Token;
+        bool IsCurrent() => gen == _refreshId && filter.SiteId == SiteId && !ct.IsCancellationRequested;
+        _isLoading = true;
+        LoadMoreCommand.NotifyCanExecuteChanged();
         try
         {
-            var gen = ++_refreshId;
-            // Task 10：历史按当前平台筛选（平台页组内只见本站记录）
-            var filter = new HistoryFilter(SiteId, SelectedUserFilter?.Id, FromDate?.Date, ToDate?.Date.AddDays(1));
-            var list = await _history.ListAsync(filter);
+            var list = await _history.ListAsync(filter, ct);
             _dispatcher.Post(() =>
             {
-                if (gen != _refreshId) return; // 过期刷新：已被更新的查询取代
-                Rows.Clear();
+                if (!IsCurrent()) return;
+                if (reset) Rows.Clear();
                 foreach (var r in list)
                     Rows.Add(new HistoryRowViewModel(r, OpenContainingFolderCoreAsync, OpenSourceCore, OpenFileCore));
+                if (list.Count > 0)
+                {
+                    var last = list[^1];
+                    _nextCursor = new(last.CreatedAt, last.FileId, last.SiteId);
+                }
+                HasMore = list.Count == PageSize;
             });
         }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested) { }
         catch (Exception ex) // 坏库等异常不崩线程（B5 模式）
         {
-            StatusMessage = $"加载历史失败：{ex.Message}";
+            _dispatcher.Post(() => { if (IsCurrent()) StatusMessage = $"加载历史失败：{ex.Message}"; });
+        }
+        finally
+        {
+            _dispatcher.Post(() =>
+            {
+                if (!IsCurrent()) return;
+                _isLoading = false;
+                LoadMoreCommand.NotifyCanExecuteChanged();
+            });
         }
     }
 
     /// <summary>加载筛选下拉用户列表（页面 OnNavigatedTo 调用；异常落 StatusMessage 不崩线程）。</summary>
     public async Task LoadFilterUsersAsync()
     {
+        var siteId = SiteId;
+        var version = ++_filterLoadId;
         try
         {
-            FilterUsers = await _history.ListUsersAsync(SiteId);
+            var users = await _history.ListUsersAsync(siteId);
+            _dispatcher.Post(() =>
+            {
+                if (siteId != SiteId || version != _filterLoadId) return;
+                FilterUsers = users;
+                OnPropertyChanged(nameof(FilterUsers));
+            });
         }
         catch (Exception ex)
         {
-            StatusMessage = $"加载用户列表失败：{ex.Message}";
+            _dispatcher.Post(() => { if (siteId == SiteId && version == _filterLoadId) StatusMessage = $"加载用户列表失败：{ex.Message}"; });
         }
-        OnPropertyChanged(nameof(FilterUsers));
     }
 
     // 控制器裁定 2：文件不存在先判断 → StatusMessage；不经 IUiDispatcher（同步快速）。

@@ -8,6 +8,10 @@ using Xunit;
 
 namespace GGdown.Tests.Engine;
 
+[CollectionDefinition("RunnerMemory", DisableParallelization = true)]
+public sealed class RunnerMemoryCollection;
+
+[Collection("RunnerMemory")]
 public class RunnerEngineTests : IDisposable
 {
     private readonly AppPaths _paths = TestPaths.Create();
@@ -17,11 +21,11 @@ public class RunnerEngineTests : IDisposable
         if (Directory.Exists(_paths.Root)) Directory.Delete(_paths.Root, true);
     }
 
-    private RunnerEngine CreateEngine(string python, string? stubPath = null)
+    private RunnerEngine CreateEngine(string python, string? stubPath = null, TimeSpan? handshakeTimeout = null)
     {
         var stub = stubPath ?? Path.Combine(AppContext.BaseDirectory, "Fixtures", "stub_runner.py");
         return new RunnerEngine(_paths,
-            new RunnerEngineOptions { PythonExe = python, RunnerScript = stub, GalleryDlPath = "" },
+            new RunnerEngineOptions { PythonExe = python, RunnerScript = stub, GalleryDlPath = "", HandshakeTimeout = handshakeTimeout ?? TimeSpan.FromSeconds(30) },
             NullLogger<RunnerEngine>.Instance);
     }
 
@@ -58,6 +62,7 @@ public class RunnerEngineTests : IDisposable
             using var doc = JsonDocument.Parse(await File.ReadAllTextAsync(capture));
             var saved = doc.RootElement.GetProperty("options");
             var config = saved.GetProperty("ggdown-rate-limit");
+            Assert.Equal(1, config.GetProperty("version").GetInt32());
             Assert.Equal(_paths.DbFile, config.GetProperty("settings-db").GetString());
             Assert.Equal(Path.Combine(_paths.TempDir, "download-rate.db"), config.GetProperty("state-db").GetString());
             Assert.Equal(_paths.Root, saved.GetProperty("base-directory").GetString());
@@ -72,6 +77,111 @@ public class RunnerEngineTests : IDisposable
         Skip.If(python is null, "本机无 Python");
         var hello = await CreateEngine(python!).HelloAsync();
         Assert.Equal(1, hello.Protocol);
+    }
+
+    private async Task<string> WriteRunnerAsync(string body)
+    {
+        var script = Path.Combine(_paths.TempDir, $"runner-{Guid.NewGuid():N}.py");
+        await File.WriteAllTextAsync(script, "import json, sys, time\n" + body);
+        return script;
+    }
+
+    [SkippableTheory]
+    [InlineData("hello")]
+    [InlineData("whoami")]
+    [InlineData("following")]
+    [InlineData("user-info")]
+    [InlineData("download")]
+    public async Task Every_operation_rejects_incompatible_handshake(string command)
+    {
+        var python = LocatePython();
+        Skip.If(python is null, "本机无 Python");
+        var script = await WriteRunnerAsync("print(json.dumps({'ev':'hello','protocol':2}), flush=True)\n" +
+            "print(json.dumps({'ev':'account','screen_name':'wrong'}), flush=True)\n" +
+            "print(json.dumps({'ev':'user','rest_id':'1'}), flush=True)\n");
+        var engine = CreateEngine(python!, script);
+        Task Invoke() => command switch
+        {
+            "hello" => engine.HelloAsync(),
+            "whoami" => engine.WhoAmIAsync("twitter", "cookies"),
+            "following" => engine.ListFollowingAsync("twitter", "cookies"),
+            "user-info" => engine.GetUserInfoAsync("twitter", "cookies", "alice"),
+            _ => engine.DownloadAsync(new DownloadPlan("twitter", ["url"], _paths.Root, new Dictionary<string, object?>()), "cookies", new Progress<EngineEvent>()),
+        };
+        var error = await Assert.ThrowsAsync<EngineException>(Invoke);
+        Assert.Contains("协议", error.Message);
+    }
+
+    [SkippableTheory]
+    [InlineData("print(json.dumps({'ev':'account','screen_name':'wrong'}), flush=True)")]
+    [InlineData("print(json.dumps({'ev':'hello'}), flush=True)")]
+    [InlineData("print('ordinary stdout noise', flush=True)")]
+    public async Task First_message_must_be_a_valid_hello(string output)
+    {
+        var python = LocatePython();
+        Skip.If(python is null, "本机无 Python");
+        var script = await WriteRunnerAsync(output + "\n");
+        await Assert.ThrowsAsync<EngineException>(() => CreateEngine(python!, script).WhoAmIAsync("twitter", "cookies"));
+    }
+
+    [SkippableFact]
+    public async Task Missing_hello_times_out_and_terminates_runner()
+    {
+        var python = LocatePython();
+        Skip.If(python is null, "本机无 Python");
+        var script = await WriteRunnerAsync("time.sleep(60)\n");
+        using var guard = new CancellationTokenSource(TimeSpan.FromSeconds(8));
+        var error = await Assert.ThrowsAsync<EngineException>(() =>
+            CreateEngine(python!, script, TimeSpan.FromMilliseconds(500)).HelloAsync(guard.Token));
+        Assert.Contains("握手", error.Message);
+    }
+
+    [SkippableFact]
+    public async Task Handshake_deadline_does_not_limit_the_download_or_async_receiver()
+    {
+        var python = LocatePython();
+        Skip.If(python is null, "本机无 Python");
+        var script = await WriteRunnerAsync("print(json.dumps({'ev':'hello','protocol':1}), flush=True)\n" +
+            "time.sleep(1.2)\nprint(json.dumps({'ev':'file-done','path':'a.jpg'}), flush=True)\n" +
+            "print(json.dumps({'ev':'job-done','total':1,'failed':0}), flush=True)\n");
+        IDownloadEngine engine = CreateEngine(python!, script, TimeSpan.FromSeconds(1));
+        var events = new List<string>();
+        using var guard = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+        await engine.DownloadWithEventsAsync(new DownloadPlan("twitter", ["url"], _paths.Root, new Dictionary<string, object?>()),
+            "cookies", async (ev, ct) =>
+            {
+                if (ev.Event == "file-done") await Task.Delay(1200, ct);
+                events.Add(ev.Event);
+            }, guard.Token);
+        Assert.Equal(new[] { "hello", "file-done", "job-done" }, events);
+    }
+
+    [SkippableFact]
+    public async Task Download_without_job_done_is_not_successful()
+    {
+        var python = LocatePython();
+        Skip.If(python is null, "本机无 Python");
+        var script = await WriteRunnerAsync("print(json.dumps({'ev':'hello','protocol':1}), flush=True)\n");
+        var error = await Assert.ThrowsAsync<EngineException>(() => CreateEngine(python!, script).DownloadAsync(
+            new DownloadPlan("twitter", ["url"], _paths.Root, new Dictionary<string, object?>()), "cookies", new Progress<EngineEvent>()));
+        Assert.Contains("job-done", error.Message);
+    }
+
+    [SkippableFact]
+    public async Task Large_stderr_is_drained_and_only_the_tail_is_reported()
+    {
+        var python = LocatePython();
+        Skip.If(python is null, "本机无 Python");
+        var script = await WriteRunnerAsync("print(json.dumps({'ev':'hello','protocol':1}), flush=True)\n" +
+            "sys.stderr.write('sensitive-prefix' + 'x' * 4000000 + 'tail-marker')\nsys.stderr.flush()\nsys.exit(3)\n");
+        using var guard = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+        var allocatedBefore = GC.GetTotalAllocatedBytes();
+        var error = await Assert.ThrowsAsync<EngineException>(() => CreateEngine(python!, script).DownloadAsync(
+            new DownloadPlan("twitter", ["url"], _paths.Root, new Dictionary<string, object?>()), "cookies", new Progress<EngineEvent>(), guard.Token));
+        Assert.EndsWith("tail-marker", error.Message);
+        Assert.DoesNotContain("sensitive-prefix", error.Message);
+        Assert.InRange(error.Message.Length, 11, 2200);
+        Assert.InRange(GC.GetTotalAllocatedBytes() - allocatedBefore, 0, 4_000_000);
     }
 
     [SkippableFact]
@@ -184,5 +294,46 @@ public class RunnerEngineTests : IDisposable
             try { await download; }
             catch (OperationCanceledException) { }
         }
+    }
+
+    [SkippableFact]
+    public async Task Download_callback_failure_does_not_leave_an_orphan_runner()
+    {
+        var python = LocatePython();
+        Skip.If(python is null, "本机无 Python");
+        var script = Path.Combine(_paths.TempDir, "callback-failure.py");
+        var pidFile = Path.Combine(_paths.TempDir, "callback-pid.txt");
+        await File.WriteAllTextAsync(script, """
+            import os, sys, json, time
+            with open(sys.argv[1], 'w') as f:
+                f.write(str(os.getpid()))
+            print(json.dumps({'ev': 'hello', 'protocol': 1}), flush=True)
+            print(json.dumps({'ev': 'file-start', 'path': 'test.jpg'}), flush=True)
+            time.sleep(60)
+            """);
+        await File.WriteAllTextAsync(script, (await File.ReadAllTextAsync(script))
+            .Replace("sys.argv[1]", "'" + pidFile.Replace("\\", "/") + "'"));
+        var plan = new DownloadPlan("twitter", ["https://x.com/alice/media"], _paths.Root,
+            new Dictionary<string, object?>());
+        await Assert.ThrowsAsync<InvalidOperationException>(() => CreateEngine(python!, script)
+            .DownloadAsync(plan, "good.txt", new ThrowingProgress()));
+        Process process;
+        try { process = Process.GetProcessById(int.Parse(await File.ReadAllTextAsync(pidFile))); }
+        catch (ArgumentException) { return; } // 引擎已退出且系统已回收进程。
+        using var processHandle = process;
+        try
+        {
+            Assert.True(process.HasExited, "回调失败后 runner 仍在后台运行");
+        }
+        finally
+        {
+            if (!process.HasExited) process.Kill(entireProcessTree: true);
+            await process.WaitForExitAsync();
+        }
+    }
+
+    private sealed class ThrowingProgress : IProgress<EngineEvent>
+    {
+        public void Report(EngineEvent value) => throw new InvalidOperationException("测试回调失败");
     }
 }
