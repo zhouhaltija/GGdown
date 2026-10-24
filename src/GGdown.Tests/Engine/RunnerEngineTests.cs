@@ -16,6 +16,58 @@ public class RunnerEngineTests : IDisposable
 {
     private readonly AppPaths _paths = TestPaths.Create();
 
+    [SkippableFact]
+    public async Task Operation_waits_before_reading_runtime_paths()
+    {
+        var python = LocatePython();
+        Skip.If(python is null, "本机无 Python");
+        var ready = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var options = new RunnerEngineOptions { Initialization = ready.Task };
+        var engine = new RunnerEngine(_paths, options, NullLogger<RunnerEngine>.Instance);
+        var operation = engine.HelloAsync();
+        Assert.False(operation.IsCompleted);
+        options.PythonExe = python!;
+        options.RunnerScript = Path.Combine(AppContext.BaseDirectory, "Fixtures", "stub_runner.py");
+        ready.SetResult();
+        Assert.Equal(1, (await operation).Protocol);
+    }
+
+    [Fact]
+    public async Task Canceling_wait_does_not_cancel_shared_initialization()
+    {
+        var ready = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var engine = new RunnerEngine(_paths, new RunnerEngineOptions { Initialization = ready.Task },
+            NullLogger<RunnerEngine>.Instance);
+        using var cancel = new CancellationTokenSource();
+        var operation = engine.HelloAsync(cancel.Token);
+        cancel.Cancel();
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => operation);
+        Assert.False(ready.Task.IsCompleted);
+        ready.SetResult();
+    }
+
+    [Fact]
+    public async Task Initialization_failure_is_reported_without_starting_python()
+    {
+        var engine = new RunnerEngine(_paths, new RunnerEngineOptions
+        {
+            Initialization = Task.FromException(new InvalidOperationException("初始化失败")),
+            PythonExe = "does-not-exist.exe",
+        }, NullLogger<RunnerEngine>.Instance);
+        var error = await Assert.ThrowsAsync<InvalidOperationException>(() => engine.HelloAsync());
+        Assert.Equal("初始化失败", error.Message);
+    }
+
+    // 引擎未播种时 PythonExe/RunnerScript 都是空串：必须先给出「引擎未安装」，
+    // 不能在读取运行路径时抛空路径异常（启动早期的租约/路径代码不得改变这一语义）。
+    [Fact]
+    public async Task Unconfigured_engine_reports_missing_engine_instead_of_path_error()
+    {
+        var engine = new RunnerEngine(_paths, new RunnerEngineOptions(), NullLogger<RunnerEngine>.Instance);
+        var error = await Assert.ThrowsAsync<EngineException>(() => engine.HelloAsync());
+        Assert.Contains("引擎未安装", error.Message);
+    }
+
     public void Dispose()
     {
         if (Directory.Exists(_paths.Root)) Directory.Delete(_paths.Root, true);

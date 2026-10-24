@@ -112,7 +112,10 @@ public sealed class AppSettings(
     {
         var id = SiteCatalog.Get(siteId).SiteId;
         await using var db = await siteFactory.CreateAsync(id, ct);
-        var rows = await db.SiteSettings.AsNoTracking().Where(s => s.SiteId == id).ToListAsync(ct);
+        // 内部键（统计投影版本等）不属于站点选项，不能出现在下载参数里。
+        var rows = await db.SiteSettings.AsNoTracking()
+            .Where(s => s.SiteId == id && !s.Key.StartsWith(SiteInternalSettings.Prefix))
+            .ToListAsync(ct);
         if (rows.Count == 0) return sites.Get(id).DefaultOptions;
         var dict = new Dictionary<string, object?>();
         foreach (var row in rows)
@@ -124,10 +127,15 @@ public sealed class AppSettings(
     {
         var id = SiteCatalog.Get(siteId).SiteId;
         await using var db = await siteFactory.CreateAsync(id, ct);
-        // 语义对齐旧整键存储：保存的选项集整体替换（缺省键回退 DefaultOptions）
-        var existing = await db.SiteSettings.Where(s => s.SiteId == id).ToListAsync(ct);
+        // 语义对齐旧整键存储：保存的选项集整体替换（缺省键回退 DefaultOptions）。
+        // 只替换用户键，内部键必须保留，否则每次保存设置都会让下次启动重新做全量统计校正。
+        var existing = await db.SiteSettings
+            .Where(s => s.SiteId == id && !s.Key.StartsWith(SiteInternalSettings.Prefix))
+            .ToListAsync(ct);
         db.SiteSettings.RemoveRange(existing);
         foreach (var (key, value) in options)
+        {
+            if (SiteInternalSettings.IsInternal(key)) continue;
             db.SiteSettings.Add(new SiteSettingEntry
             {
                 SiteId = id,
@@ -135,6 +143,7 @@ public sealed class AppSettings(
                 // 值一律 JSON 序列化（字符串带引号）——裸存会让 "3" 回读成数字、丢失 string 语义
                 Value = JsonSerializer.Serialize(value, JsonOptions),
             });
+        }
         await db.SaveChangesAsync(ct);
     }
 

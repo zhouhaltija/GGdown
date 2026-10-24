@@ -13,6 +13,7 @@ public class AppSettingsTests : IDisposable
     private readonly (SqliteConnection, GGdownGlobalDbContext) _global;
     private readonly IAppSettings _settings;
     private readonly GGdown.Paths.AppPaths _paths;
+    private static readonly DateTime Finished = new(2026, 10, 20, 12, 0, 0, DateTimeKind.Utc);
 
     public AppSettingsTests()
     {
@@ -85,6 +86,72 @@ public class AppSettingsTests : IDisposable
         // 全局库没有 site.<id>.options 键
         Assert.Null(await new GGdownSettingsStore<GGdownGlobalDbContext>(_global.Item2)
             .GetAsync<string>("site.twitter.options", null));
+    }
+
+    [Fact]
+    public async Task Saving_site_options_preserves_internal_settings_rows()
+    {
+        var factory = new SiteDbContextFactory(_paths);
+        await using (var db = await factory.CreateAsync("twitter"))
+        {
+            db.SiteSettings.Add(new SiteSettingEntry { SiteId = "twitter", Key = "ggdown.stats-projection.version", Value = "1" });
+            db.SiteSettings.Add(new SiteSettingEntry { SiteId = "twitter", Key = "videos", Value = "false" });
+            await db.SaveChangesAsync();
+        }
+
+        await _settings.SetSiteOptionsAsync("twitter", new Dictionary<string, object?> { ["videos"] = true });
+
+        await using var verify = await factory.CreateAsync("twitter");
+        Assert.Equal("1", (await verify.SiteSettings.SingleAsync(s => s.Key == "ggdown.stats-projection.version")).Value);
+        Assert.Equal("true", (await verify.SiteSettings.SingleAsync(s => s.Key == "videos")).Value);
+    }
+
+    [Fact]
+    public async Task Site_options_do_not_expose_internal_settings_keys()
+    {
+        var factory = new SiteDbContextFactory(_paths);
+        await using (var db = await factory.CreateAsync("twitter"))
+        {
+            db.SiteSettings.Add(new SiteSettingEntry { SiteId = "twitter", Key = "ggdown.stats-projection.version", Value = "1" });
+            db.SiteSettings.Add(new SiteSettingEntry { SiteId = "twitter", Key = "videos", Value = "false" });
+            await db.SaveChangesAsync();
+        }
+
+        var options = await _settings.GetSiteOptionsAsync("twitter");
+        Assert.False(options.ContainsKey("ggdown.stats-projection.version"));
+        Assert.False((bool)options["videos"]!);
+    }
+
+    // 站点选项曾整体替换平台库 SiteSettings 行集，会连带删掉内部版本标记，
+    // 使每次保存设置后的下一次启动又做全量统计校正。
+    [Fact]
+    public async Task Saving_site_options_keeps_startup_statistics_incremental()
+    {
+        var factory = new SiteDbContextFactory(_paths);
+        await using (var db = await factory.CreateAsync("twitter"))
+        {
+            var account = new Account { SiteId = "twitter", CookiePath = "synthetic" };
+            var user = new User { SiteId = "twitter", RestId = "1", ScreenName = "synthetic" };
+            db.AddRange(account, user);
+            await db.SaveChangesAsync();
+            db.Jobs.Add(new DownloadJob
+            {
+                SiteId = "twitter", AccountId = account.Id, UserId = user.Id, Status = JobStatus.Completed,
+                CreatedAt = Finished.AddHours(-1), FinishedAt = Finished,
+            });
+            await db.SaveChangesAsync();
+        }
+
+        var stats = new StatsAggregator(factory);
+        await stats.RepairOnStartupAsync();
+        await using (var db = await factory.CreateAsync("twitter"))
+            await db.Users.ExecuteUpdateAsync(s => s.SetProperty(u => u.UpdatedAt, Finished));
+
+        await _settings.SetSiteOptionsAsync("twitter", new Dictionary<string, object?> { ["videos"] = false });
+        await stats.RepairOnStartupAsync();
+
+        await using var verify = await factory.CreateAsync("twitter");
+        Assert.Equal(Finished, (await verify.Users.SingleAsync()).UpdatedAt);
     }
 
     [Fact]

@@ -15,6 +15,7 @@ public sealed class RunnerEngineOptions
     public string RunnerScript { get; set; } = "";
     public string GalleryDlPath { get; set; } = "";
     public TimeSpan HandshakeTimeout { get; set; } = TimeSpan.FromSeconds(30);
+    public Task Initialization { get; set; } = Task.CompletedTask;
 }
 
 public sealed class RunnerEngine(
@@ -151,10 +152,27 @@ public sealed class RunnerEngine(
     private async Task<RunnerResult> RunAsync(IReadOnlyList<string> args,
         Func<EngineEvent, CancellationToken, ValueTask> onEvent, CancellationToken ct, bool killOnCancel)
     {
+        // 只取消本次等待，不取消所有操作共享的引擎初始化；完成后才读取运行路径。
+        await options.Initialization.WaitAsync(ct);
         // B8 警告清理：CS9113（log 主构造参数未读）——Debug 级记录起止（默认 MinimumLevel=Information 不落盘）
         log.LogDebug("runner 启动：{Args}", string.Join(" ", args));
+        // 先判定「引擎未安装」，再读运行路径：未播种时 RunnerScript 为空，GetFullPath 会抛空路径异常，
+        // 用户就看不到「引擎未安装」这条可操作的原因。
         if (string.IsNullOrEmpty(options.PythonExe))
             throw new EngineException("引擎未安装：找不到 python（首次启动会从安装目录播种 engine）");
+        var pythonIsPath = Path.IsPathRooted(options.PythonExe)
+            || options.PythonExe.Contains(Path.DirectorySeparatorChar)
+            || options.PythonExe.Contains(Path.AltDirectorySeparatorChar);
+        if (pythonIsPath && !File.Exists(options.PythonExe))
+            throw new EngineException($"引擎未安装：找不到 {options.PythonExe}（首次启动会从安装目录播种 engine）");
+        // 裸命令名（如 "python"）由 Process.Start 走 PATH 解析，File.Exists 无法判定，
+        // 缺失时仍由 p.Start() 抛 Win32Exception → 队列兜底 catch 标 Failed。
+
+        // 受管理的版本目录持读租约，覆盖进程创建到完全退出；开发源码路径与旧式目录不持租约。
+        var runtimeDirectory = Path.GetDirectoryName(Path.GetFullPath(options.RunnerScript));
+        using var versionLease = runtimeDirectory is not null
+            && EngineVersionMaintenance.IsManagedVersion(paths.EngineDir, runtimeDirectory)
+                ? EngineVersionLease.Acquire(runtimeDirectory) : null;
 
         var psi = new ProcessStartInfo
         {
@@ -176,15 +194,6 @@ public sealed class RunnerEngine(
         psi.Environment["PYTHONIOENCODING"] = "utf-8";
         var proxyUrl = settings is null ? null : (await settings.GetProxyAsync(ct)).ToUrl();
         ProxyConfig.ApplyTo(psi, proxyUrl);
-
-        // 审查 Important-2：PythonExe 指向具体文件但缺失时，Win32Exception 在 p.Start() 才抛出且信息晦涩，
-        // 这里提前给出明确原因（引擎未播种）。裸命令名（如 "python"）由 Process.Start 走 PATH 解析，
-        // File.Exists 无法判定，缺失时仍由 p.Start() 抛 Win32Exception → 队列兜底 catch 标 Failed。
-        var pythonIsPath = Path.IsPathRooted(options.PythonExe)
-            || options.PythonExe.Contains(Path.DirectorySeparatorChar)
-            || options.PythonExe.Contains(Path.AltDirectorySeparatorChar);
-        if (pythonIsPath && !File.Exists(options.PythonExe))
-            throw new EngineException($"引擎未安装：找不到 {options.PythonExe}（首次启动会从安装目录播种 engine）");
 
         using var p = new Process { StartInfo = psi };
         p.Start();

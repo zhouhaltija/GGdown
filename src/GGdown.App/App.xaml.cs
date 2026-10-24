@@ -112,13 +112,15 @@ public partial class App : Application
             ValidateOnBuild = true,
         });
 
-        // 启动恢复：标记中断任务并保留恢复请求（后台执行，不阻塞首帧）。
-        _ = Task.Run(async () =>
-        {
-            try
+        // 引擎与数据库独立准备；浏览已有数据无需等待引擎校验或复制。
+        var startup = StartupCoordinator.Start(
+            async () =>
             {
                 await ApplyRuntimeSeedingAsync(paths);
                 ApplyDevEngineOverrides();
+            },
+            async () =>
+            {
                 using var scope = Services.CreateScope();
                 // Task 6：存量单库拆分（幂等：主库含 Accounts 表才动，先于全局库初始化）
                 var split = await SiteDbSplitMigration.ApplyAsync(paths);
@@ -131,28 +133,23 @@ public partial class App : Application
                 // 原先在 UI 线程同步等待（EF 冷启动推迟窗口出现），移到后台、先于全局就绪门
                 try { await Services.GetRequiredService<ICurrentSite>().LoadAsync(); }
                 catch (Exception ex) { Log.Error(ex, "加载当前站点失败"); }
-                _globalReadyTcs.TrySetResult(); // 侧栏可显示
+            },
+            async () =>
+            {
+                using var scope = Services.CreateScope();
                 // Global Constraint：启动即应用保存的并发数（此前仅设置页应用，未访问设置页不生效）
                 var queue = scope.ServiceProvider.GetRequiredService<IDownloadQueueService>();
                 queue.Concurrency = await scope.ServiceProvider.GetRequiredService<IAppSettings>()
                     .GetConcurrencyAsync();
                 await scope.ServiceProvider.GetRequiredService<IDownloadQueueService>()
                     .RecoverOnStartupAsync();
-                // 先恢复中断任务，再用最终状态同步重建次数和末次下载时间。
+                // 先恢复中断任务，再修复尚未提交完的统计投影。
                 await scope.ServiceProvider.GetRequiredService<StatsAggregator>()
-                    .RecalculateDownloadCountsAsync();
-            }
-            catch (Exception ex)
-            {
-                Log.Error(ex, "启动恢复失败");
-                _readyTcs.TrySetException(ex); // 恢复失败时页面显示错误，避免在状态不完整的库上继续入队。
-            }
-            finally
-            {
-                _globalReadyTcs.TrySetResult(); // 前序步骤异常时也放行侧栏
-                _readyTcs.TrySetResult();
-            } // 全局导航仍可使用；完整就绪门在启动失败时保留异常，交页面显示错误。
-        });
+                    .RepairOnStartupAsync();
+            });
+        Services.GetRequiredService<RunnerEngineOptions>().Initialization = startup.EngineReady;
+        _ = PublishDataReadinessAsync(startup);
+        _ = ObserveEngineReadinessAsync(startup.EngineReady);
 
         _window = new MainWindow(Services);
         // B4 控制器裁定：Picker 属主句柄注入（替代 B1 的 GetActiveWindow 启发式），须在窗口创建后
@@ -166,6 +163,29 @@ public partial class App : Application
 
     /// <summary>DEBUG：引擎用仓库源码 + PATH python（与 E2E 相同），免去播种。</summary>
     partial void ApplyDevEngineOverrides();
+
+    private static async Task PublishDataReadinessAsync(StartupTasks startup)
+    {
+        try { await startup.GlobalReady; }
+        catch { /* 完整数据就绪任务会传播并记录同一错误，侧栏仍可打开。 */ }
+        finally { _globalReadyTcs.TrySetResult(); }
+        try
+        {
+            await startup.DataReady;
+            _readyTcs.TrySetResult();
+        }
+        catch (Exception ex)
+        {
+            Log.Error(ex, "启动恢复失败");
+            _readyTcs.TrySetException(ex);
+        }
+    }
+
+    private static async Task ObserveEngineReadinessAsync(Task readiness)
+    {
+        try { await readiness; }
+        catch (Exception ex) { Log.Error(ex, "引擎初始化失败，仍可浏览已有数据"); }
+    }
 
     /// <summary>
     /// 后台安装独立引擎版本，验证后切换指针；保留旧版本供运行中的进程继续使用。
@@ -189,10 +209,26 @@ public partial class App : Application
                 Log.Warning(installation.UpdateError, "引擎更新失败，继续使用 {EngineDirectory}", installation.Directory);
             else
                 Log.Information("引擎已就绪：{EngineDirectory}，本次安装 {Updated}", installation.Directory, installation.Updated);
+            if (installation.UpdateError is null)
+            {
+                // 维护失败只记诊断：清理历史版本绝不能影响引擎就绪。
+                try
+                {
+                    var removed = EngineVersionMaintenance.Cleanup(paths.EngineDir, installation.Directory, DateTime.UtcNow,
+                        ex => Log.Warning(ex, "跳过无法清理的引擎历史版本"));
+                    if (removed > 0) Log.Information("已清理 {Count} 个闲置引擎版本", removed);
+                }
+                catch (Exception ex)
+                {
+                    Log.Warning(ex, "引擎历史版本维护失败，不影响本次启动");
+                }
+            }
         }
-        catch (Exception ex)
+        catch (Exception ex) when (ex is not EngineException)
         {
-            Log.Error(ex, "引擎安装失败（不阻断启动）");
+            // EngineException 不携带内部异常，先完整记录再包装，避免诊断信息只留一行 Message。
+            Log.Error(ex, "引擎初始化失败");
+            throw new EngineException($"引擎初始化失败：{ex.Message}");
         }
     }
 }

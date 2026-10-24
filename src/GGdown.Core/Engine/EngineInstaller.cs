@@ -33,6 +33,7 @@ public sealed class EngineInstaller(Func<string, CancellationToken, Task>? valid
             }
         }
         string? staging = null;
+        IDisposable? stagingLease = null;
         try
         {
             if (!Directory.Exists(bundledDirectory))
@@ -50,6 +51,7 @@ public sealed class EngineInstaller(Func<string, CancellationToken, Task>? valid
             Directory.CreateDirectory(versions);
             staging = Path.Combine(versions, ".install-" + Guid.NewGuid().ToString("N"));
             Directory.CreateDirectory(staging);
+            stagingLease = EngineVersionLease.Acquire(staging);
             foreach (var file in Directory.EnumerateFiles(bundledDirectory, "*", SearchOption.AllDirectories))
             {
                 ct.ThrowIfCancellationRequested();
@@ -90,6 +92,7 @@ public sealed class EngineInstaller(Func<string, CancellationToken, Task>? valid
         }
         finally
         {
+            stagingLease?.Dispose();
             if (staging is not null)
             {
                 try { Directory.Delete(staging, recursive: true); }
