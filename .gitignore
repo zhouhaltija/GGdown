@@ -25,6 +25,8 @@ GGdown.lnk
 
 
 .claude/worktrees/
+# 本机助手工作数据（记忆、会话产物），不入库
+.workbuddy-ai/
 
 # 本机代理/开发指引，不提交到仓库
 AGENTS.md
