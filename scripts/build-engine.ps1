@@ -49,8 +49,21 @@ foreach ($distInfo in Get-ChildItem -LiteralPath $packages -Directory -Filter '*
         Where-Object { $_.Name -match '^(licen[sc]e|copying)(\.|$)' })
     if ($licenses.Count -eq 0) { throw "依赖包缺少许可证：$($distInfo.Name)" }
 }
-Copy-Item -LiteralPath (Join-Path $repoRoot 'third_party/TikTokDownloader/src') -Destination $packages -Recurse
-Copy-Item -LiteralPath (Join-Path $repoRoot 'third_party/TikTokDownloader/locale') -Destination $packages -Recurse
+# 复制源码树时剔除开发缓存：发行包只需源码，开发环境的 .pyc 与内置解释器版本不符。
+function Copy-SourceTree {
+    param([Parameter(Mandatory)][string]$Source, [Parameter(Mandatory)][string]$Destination)
+    $sourceRoot = [IO.Path]::GetFullPath($Source)
+    $targetRoot = Join-Path $Destination ([IO.Path]::GetFileName($sourceRoot))
+    foreach ($file in Get-ChildItem -LiteralPath $sourceRoot -Recurse -File) {
+        if ($file.Extension -eq '.pyc' -or $file.DirectoryName -match '[\\/]__pycache__([\\/]|$)') { continue }
+        $target = Join-Path $targetRoot $file.FullName.Substring($sourceRoot.Length).TrimStart('\', '/')
+        $parent = Split-Path -Parent $target
+        if (-not (Test-Path -LiteralPath $parent)) { New-Item -ItemType Directory -Path $parent -Force | Out-Null }
+        Copy-Item -LiteralPath $file.FullName -Destination $target
+    }
+}
+Copy-SourceTree -Source (Join-Path $repoRoot 'third_party/TikTokDownloader/src') -Destination $packages
+Copy-SourceTree -Source (Join-Path $repoRoot 'third_party/TikTokDownloader/locale') -Destination $packages
 Get-ChildItem -LiteralPath (Join-Path $repoRoot 'engine') -File -Filter '*.py' |
     Copy-Item -Destination $engineDir
 New-Item -ItemType Directory -Path (Join-Path $engineDir 'sites') -Force | Out-Null
@@ -67,8 +80,15 @@ $pth = Join-Path $pythonDir 'python313._pth'
     built_at = [DateTime]::UtcNow.ToString('o')
 } | ConvertTo-Json | Set-Content -LiteralPath (Join-Path $engineDir 'engine.json') -Encoding utf8
 
-& (Join-Path $pythonDir 'python.exe') -c 'import gallery_dl, curl_cffi, sqlite3, rate_limit, sites.douyin, src.interface.detail'
+# -B 保证自检不会向发行目录写入字节码缓存。
+$pythonExe = Join-Path $pythonDir 'python.exe'
+& $pythonExe -B -c 'import gallery_dl, curl_cffi, sqlite3, rate_limit, sites.douyin, src.interface.detail'
 if ($LASTEXITCODE -ne 0) { throw '内置引擎模块导入验证失败' }
-$hello = & (Join-Path $pythonDir 'python.exe') (Join-Path $engineDir 'runner.py') hello
+& $pythonExe -B (Join-Path $engineDir 'runtime_smoke.py')
+if ($LASTEXITCODE -ne 0) { throw '内置引擎依赖闭包自检失败' }
+$hello = & $pythonExe -B (Join-Path $engineDir 'runner.py') hello
 if ($LASTEXITCODE -ne 0 -or (($hello | ConvertFrom-Json).protocol -ne 1)) { throw '内置引擎协议验证失败' }
+$stale = @(Get-ChildItem -LiteralPath $engineDir -Recurse -File -Filter '*.pyc') +
+    @(Get-ChildItem -LiteralPath $engineDir -Recurse -Directory -Filter '__pycache__')
+if ($stale.Count -gt 0) { throw "发行引擎仍包含字节码缓存：$($stale[0].FullName)" }
 Write-Host "引擎组装完成：$engineDir"

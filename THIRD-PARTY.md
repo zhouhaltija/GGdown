@@ -39,13 +39,20 @@ for this lock file is:
 | License | Packages (version) |
 | --- | --- |
 | Apache-2.0 | aiofiles 25.1.0; requests 2.34.2 |
-| BSD (see bundled texts) | colorama 0.4.6; emoji 2.16.0; PySocks 1.7.1; pyperclip 1.11.0 |
+| BSD (see bundled texts) | emoji 2.16.0; PySocks 1.7.1 |
 | BSD-2-Clause | Pygments 2.21.0 |
-| BSD-3-Clause | click 8.5.0; idna 3.20; lxml 6.1.3; pycparser 3.0; starlette 1.7.0; uvicorn 0.54.0 |
-| MIT | aiosqlite 0.22.1; annotated-doc 0.0.5; annotated-types 0.8.0; anyio 4.15.1; charset-normalizer 3.5.1; curl-cffi 0.16.3; et-xmlfile 2.0.0; fastapi 0.141.1; h11 0.16.0; javascript 1!1.2.6; markdown-it-py 4.2.0; mdurl 0.1.2; openpyxl 3.1.5; pydantic 2.13.5; pydantic-core 2.46.5; rich 15.0.0; typing-inspection 0.4.4; urllib3 2.8.0 |
+| BSD-3-Clause | idna 3.20; pycparser 3.0 |
+| MIT | aiosqlite 0.22.1; charset-normalizer 3.5.1; curl-cffi 0.16.3; markdown-it-py 4.2.0; mdurl 0.1.2; rich 15.0.0; urllib3 2.8.0 |
 | MIT-0 | cffi 2.1.1 |
 | MPL-2.0 | certifi 2026.7.22 |
-| PSF-2.0 | typing-extensions 4.16.0 |
+
+Only the packages the engine actually imports are shipped. The unused
+application-server dependencies (`fastapi`, `uvicorn`, `pydantic`, `lxml`,
+`openpyxl`, `javascript`, `pyperclip`) and their now-unneeded transitive
+packages are no longer in the root dependencies or the lock file.
+`pytest` and its plugins are development-only and are never installed into
+the bundled engine; this also excludes their transitive packages such as
+`colorama`, which remains in the lock file for the test environment only.
 
 The gallery-dl wheel also retains its license in `site-packages`; the
 separate `licenses/gallery-dl-LICENSE` is copied from the same pinned wheel.
@@ -61,6 +68,11 @@ that commit and have no tracked modifications. The build uses uv's
 Python 3.13.7 and `engine/uv.lock` to install hash-locked dependencies into
 the bundled Python environment, and copies the wheel's gallery-dl license.
 It includes all top-level engine Python modules, including `rate_limit.py`.
+The DouK source tree is copied without development bytecode
+(`__pycache__`/`.pyc`), and the bundled interpreter verifies itself by
+running `runtime_smoke.py` (imports and object construction only, no
+network) and the protocol `hello` handshake with `-B` before the engine
+directory is accepted.
 End users do not need uv or a separate Python installation.
 
 Tags such as `v1.0.0` trigger `.github/workflows/release.yml`: tests,
