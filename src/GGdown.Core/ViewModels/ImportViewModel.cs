@@ -123,7 +123,7 @@ public partial class ImportViewModel : ObservableObject
         finally { IsBusy = false; }
     }
 
-    public async Task<bool> ImportCookiesAsync(string cookiesFilePath, string? refreshToken = null,
+    public async Task<bool> ImportCookiesAsync(string? cookiesFilePath, string? refreshToken = null,
         CancellationToken ct = default)
     {
         var siteId = SiteId;

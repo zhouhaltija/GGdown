@@ -33,7 +33,8 @@ public sealed partial class PixivSiteProvider : ISiteProvider
         new OptionField("ugoira", OptionKind.Boolean, true, "下载动图（ugoira）"),
         new OptionField("novel_covers", OptionKind.Boolean, false, "同时下载小说封面"),
         new OptionField("novel_embeds", OptionKind.Boolean, false, "同时下载小说内嵌图"),
-        new OptionField("filename", OptionKind.Text, "{id}_p{num}.{extension}", "文件命名模板"),
+        new OptionField("filename", OptionKind.Text, "{id}_p{num}.{extension}", "插画漫画文件命名模板"),
+        new OptionField("novel_filename", OptionKind.Text, "{title} [{id}]{suffix}.{extension}", "小说文件命名模板"),
         new OptionField("sleep", OptionKind.Text, "1", "请求间隔（秒）"),
     ]);
 
@@ -44,6 +45,7 @@ public sealed partial class PixivSiteProvider : ISiteProvider
             ["novel_covers"] = false,
             ["novel_embeds"] = false,
             ["filename"] = "{id}_p{num}.{extension}",
+            ["novel_filename"] = "{title} [{id}]{suffix}.{extension}",
             ["sleep"] = "1",
         };
 
@@ -116,7 +118,7 @@ public sealed partial class PixivSiteProvider : ISiteProvider
             ["archive"] = paths.ArchiveFile,
             ["covers"] = B("novel_covers", false),
             ["embeds"] = B("novel_embeds", false),
-            ["filename"] = S("filename", "{id}_p{num}.{extension}"),
+            ["filename"] = S("novel_filename", "{title} [{id}]{suffix}.{extension}"),
             ["sleep-request"] = S("sleep", "1"),
             ["directory"] = directory,
         };

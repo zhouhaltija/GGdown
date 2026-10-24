@@ -31,13 +31,16 @@ GGdown 是面向 **X（Twitter）、Pixiv 和抖音**的中文 Windows 下载工
 
 安装包包含 .NET、Windows App SDK 和 Python 引擎，无需另行安装开发工具。安装位置为 `%LOCALAPPDATA%\Programs\GGdown`，使用当前用户权限。
 
-**Pixiv** 还需要 refresh token。在开发环境可运行：
+**Pixiv** 使用普通免费账号的 refresh token 登录，Cookie 文件可选。在开发环境可运行：
 
 ```powershell
 uv run --project engine --locked gallery-dl oauth:pixiv
 ```
 
 按 gallery-dl 的 OAuth 流程取得 token，并填入软件的 Pixiv 导入对话框。
+
+下载提示 Cookie 文件损坏或缺少 `auth_token` 时，请从已登录的 X 浏览器重新导出并导入 Cookie。
+Pixiv 提示官方维护时，请等待服务恢复后重试，无需重新导入凭据。其他 HTTP 403、405、429 或服务端错误也不能用于判断 refresh token 已失效，可检查官方服务状态与代理后重试。
 
 **抖音单个视频**可以粘贴纯链接，也可以粘贴包含 `https://v.douyin.com/.../` 的整段分享文本。在用户页点击「下载单个视频」即可进入下载页，无需先添加作者。
 

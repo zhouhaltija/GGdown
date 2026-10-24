@@ -12,7 +12,7 @@ public sealed record ImportCookiesResult(Account Account, string? Error = null)
 
 public interface IAccountService
 {
-    Task<ImportCookiesResult> ImportCookiesAsync(string siteId, string cookiesFilePath,
+    Task<ImportCookiesResult> ImportCookiesAsync(string siteId, string? cookiesFilePath,
         string? refreshToken = null, CancellationToken ct = default);
     Task<ImportCookiesResult> VerifyAsync(Account account, CancellationToken ct = default);
     Task DeleteAsync(Account account, CancellationToken ct = default);
@@ -29,12 +29,14 @@ public sealed class AccountService(
         Path.Combine(paths.AccountsDir, account.CookiePath);
 
     public async Task<ImportCookiesResult> ImportCookiesAsync(
-        string siteId, string cookiesFilePath, string? refreshToken = null, CancellationToken ct = default)
+        string siteId, string? cookiesFilePath, string? refreshToken = null, CancellationToken ct = default)
     {
         var provider = sites.Get(siteId); // 校验站点存在
         if (provider.RequiresRefreshToken && string.IsNullOrWhiteSpace(refreshToken))
             return new ImportCookiesResult(new Account { SiteId = siteId },
                 "缺少 refresh-token（请运行 gallery-dl oauth:pixiv 后填入）");
+        if (string.IsNullOrWhiteSpace(cookiesFilePath) && siteId != PixivSiteProvider.Id)
+            return new ImportCookiesResult(new Account { SiteId = siteId }, "请选择 Cookie 文件");
 
         var id = Guid.NewGuid().ToString("N");
         var relative = Path.Combine(siteId, id, "cookies.txt");
@@ -44,7 +46,10 @@ public sealed class AccountService(
         var committed = false;
         try
         {
-            File.Copy(cookiesFilePath, target, overwrite: true);
+            if (string.IsNullOrWhiteSpace(cookiesFilePath))
+                await File.WriteAllTextAsync(target, "# Netscape HTTP Cookie File\n", ct);
+            else
+                File.Copy(cookiesFilePath, target, overwrite: true);
             if (!string.IsNullOrWhiteSpace(refreshToken))
                 await File.WriteAllTextAsync(Path.Combine(stagedDirectory, "refresh-token.txt"), refreshToken.Trim(), ct);
             await using var db = await siteFactory.CreateAsync(siteId, ct);

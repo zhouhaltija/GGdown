@@ -199,7 +199,7 @@ public sealed partial class UsersPage : Page
             {
                 XamlRoot = App.Current.MainWindow.DialogXamlRoot,
             };
-            if (await dialog.ShowAsync() != ContentDialogResult.Primary || dialog.CookiesPath is null) return;
+            if (await dialog.ShowAsync() != ContentDialogResult.Primary) return;
             await vm.ImportCookiesAsync(dialog.CookiesPath, dialog.RefreshToken);
             Vm.StatusMessage = vm.ResultMessage;
         }

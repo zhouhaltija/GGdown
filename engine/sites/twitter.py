@@ -4,6 +4,18 @@ from urllib.parse import unquote
 from sites import AuthError, parse_screen_name
 
 
+def validate_cookies(cookies_path):
+    from gallery_dl import util
+
+    try:
+        with open(cookies_path, encoding="utf-8-sig") as stream:
+            cookies = util.cookiestxt_load(stream)
+    except (OSError, ValueError):
+        raise AuthError("X Cookie 文件无法读取或格式已损坏，请从浏览器重新导出并导入") from None
+    if not any(cookie.name == "auth_token" and cookie.value for cookie in cookies):
+        raise AuthError("X Cookie 缺少 auth_token，请从已登录的 x.com 重新导出并导入")
+
+
 def make_api(cookies_path):
     from gallery_dl import config, extractor
     from gallery_dl.extractor.twitter import TwitterAPI

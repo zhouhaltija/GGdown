@@ -16,7 +16,7 @@
         <Button Content="选择 cookies.txt 文件" Click="OnPickFileClick"/>
         <TextBlock x:Name="PathText" Opacity="0.8" TextWrapping="Wrap"/>
         <StackPanel x:Name="TokenPanel" Spacing="8" Visibility="Collapsed">
-            <TextBlock Text="Pixiv 还需要 OAuth refresh-token（命令行运行 gallery-dl oauth:pixiv 获取）。Token 同样明文保存在本机。"
+            <TextBlock Text="Pixiv 使用 OAuth refresh-token 登录（运行 gallery-dl oauth:pixiv 获取），Cookie 文件可选。Token 同样明文保存在本机。"
                        TextWrapping="Wrap"/>
             <TextBox x:Name="TokenBox" PlaceholderText="refresh-token"
                      TextWrapping="NoWrap" TextChanged="OnTokenChanged"/>

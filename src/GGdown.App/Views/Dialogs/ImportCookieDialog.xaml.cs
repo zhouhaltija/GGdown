@@ -27,7 +27,7 @@ public sealed partial class ImportCookieDialog : ContentDialog
         {
             Title = "导入账号";
             TokenPanel.Visibility = Visibility.Visible;
-            IntroText.Text = "选择从浏览器导出的 cookies.txt（须含 PHPSESSID），并填入 refresh-token。导入后将验证账号并设为活动账号。";
+            IntroText.Text = "填入 refresh-token 即可导入 Pixiv 账号，无需付费会员。Cookie 文件可选，用于补全网页接口可见的作品。导入后将验证账号并设为活动账号。";
         }
     }
 
@@ -35,7 +35,7 @@ public sealed partial class ImportCookieDialog : ContentDialog
     {
         var hasCookies = !string.IsNullOrEmpty(_cookiesPath);
         var hasToken = !_requireRefreshToken || !string.IsNullOrWhiteSpace(TokenBox.Text);
-        IsPrimaryButtonEnabled = hasCookies && hasToken;
+        IsPrimaryButtonEnabled = _requireRefreshToken ? hasToken : hasCookies;
     }
 
     private async void OnPickFileClick(object sender, RoutedEventArgs e)

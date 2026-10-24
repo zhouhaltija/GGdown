@@ -1,6 +1,8 @@
 """Pixiv 站点命令实现，复用 gallery-dl PixivAppAPI。"""
 import os
 import re
+from contextlib import contextmanager
+from functools import wraps
 
 from sites import AuthError
 
@@ -9,6 +11,55 @@ _USER_ID_RE = re.compile(
     r"(?:(?:en/)?users/|member\.php\?id=)(\d+)",
     re.IGNORECASE,
 )
+
+
+@contextmanager
+def guard_login_errors():
+    from gallery_dl import exception
+    from gallery_dl.extractor.pixiv import PixivAppAPI
+
+    original_login = PixivAppAPI._login_impl
+
+    @wraps(original_login)
+    def login(api, username):
+        original_request = api.extractor.request
+
+        def request(url, *args, **kwargs):
+            response = original_request(url, *args, **kwargs)
+            if url == "https://oauth.secure.pixiv.net/auth/token" and response.status_code >= 400:
+                maintenance = response
+                if response.status_code == 405:
+                    try:
+                        maintenance = original_request("https://www.pixiv.net/",
+                                                       headers=api.extractor.headers_web,
+                                                       fatal=..., retries=0)
+                    except (exception.GalleryDLException, OSError):
+                        maintenance = None
+                if (maintenance is not None and maintenance.status_code == 503
+                        and "pixiv is currently under maintenance" in maintenance.text.lower()):
+                    raise exception.HttpError("Pixiv 正在官方维护，请在服务恢复后重试", maintenance)
+                if response.status_code in (400, 401):
+                    try:
+                        payload = response.json()
+                    except ValueError:
+                        payload = None
+                    if isinstance(payload, dict) and payload.get("error") == "invalid_grant":
+                        return response
+                raise exception.HttpError(
+                    f"Pixiv 登录接口返回 HTTP {response.status_code}，请检查代理或稍后重试", response)
+            return response
+
+        api.extractor.request = request
+        try:
+            return original_login(api, username)
+        finally:
+            api.extractor.request = original_request
+
+    PixivAppAPI._login_impl = login
+    try:
+        yield
+    finally:
+        PixivAppAPI._login_impl = original_login
 
 
 def refresh_token_path(cookies_path):
@@ -65,11 +116,7 @@ def make_api(cookies_path):
 def whoami(cookies_path):
     if not read_refresh_token(cookies_path):
         raise AuthError("缺少 refresh-token（请运行 gallery-dl oauth:pixiv 后填入导入对话框）")
-    api, ext = make_api(cookies_path)
-    jar = ext.cookies
-    domain = ext.cookies_domain
-    if not jar.get("PHPSESSID", domain=domain) and not jar.get("PHPSESSID"):
-        raise AuthError("cookie 无效：缺少 PHPSESSID（请从已登录的 pixiv.net 导出 Netscape cookies.txt）")
+    api, _ext = make_api(cookies_path)
     try:
         api.login()
     except AuthError:
@@ -81,7 +128,7 @@ def whoami(cookies_path):
         raise
     user = api.user
     if not user or not user.get("id"):
-        raise AuthError("cookie 或 refresh-token 无效")
+        raise AuthError("refresh-token 无效或未返回账号信息")
     return {
         "rest_id": str(user["id"]),
         "screen_name": user.get("account") or str(user["id"]),

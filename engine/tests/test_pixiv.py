@@ -8,6 +8,81 @@ from sites import AuthError
 from sites.pixiv import map_user, parse_user_id, read_refresh_token, whoami, list_following, user_info
 
 
+@pytest.mark.parametrize("status", [400, 401, 403, 405, 429, 503])
+def test_login_http_failure_is_not_reported_as_invalid_token(monkeypatch, status):
+    from gallery_dl import config, exception, extractor
+    from sites import classify_error
+    from sites.pixiv import guard_login_errors
+    from requests import Response
+
+    config.clear()
+    config.set(("extractor", "pixiv"), "refresh-token", "fictional-token")
+    ext = extractor.find("https://www.pixiv.net/users/1/artworks")
+    ext.initialize()
+    response = Response()
+    response.status_code = status
+    response._content = b"<html>Request blocked</html>"
+    monkeypatch.setattr(ext, "request", lambda *args, **kwargs: response)
+    with guard_login_errors(), pytest.raises(exception.HttpError) as error:
+        ext.api._login_impl(ext.api.username)
+    assert str(status) in str(error.value)
+    assert classify_error(error.value) is None
+
+
+def test_login_invalid_token_remains_an_authentication_error(monkeypatch):
+    from gallery_dl import config, exception, extractor
+    from sites.pixiv import guard_login_errors
+    from requests import Response
+
+    config.clear()
+    config.set(("extractor", "pixiv"), "refresh-token", "fictional-token")
+    ext = extractor.find("https://www.pixiv.net/users/1/artworks")
+    ext.initialize()
+    response = Response()
+    response.status_code = 400
+    response._content = b'{"error":"invalid_grant"}'
+    monkeypatch.setattr(ext, "request", lambda *args, **kwargs: response)
+    with guard_login_errors(), pytest.raises(exception.AuthenticationError):
+        ext.api._login_impl(ext.api.username)
+
+
+def test_official_maintenance_is_reported_without_invalidating_account(tmp_path, monkeypatch, capsys):
+    import json
+    import runner
+    from gallery_dl import config
+    from gallery_dl.extractor.common import Extractor
+    from gallery_dl.extractor.pixiv import PixivAppAPI
+    from requests import Response
+
+    config.clear()
+    cookies = tmp_path / "cookies.txt"
+    cookies.write_text("# Netscape HTTP Cookie File\n"
+                       ".pixiv.net\tTRUE\t/\tTRUE\t2147483647\tPHPSESSID\tfictional-session\n",
+                       encoding="utf-8")
+    (tmp_path / "refresh-token.txt").write_text("fictional-token", encoding="utf-8")
+
+    def request(self, url, **kwargs):
+        response = Response()
+        if url == "https://oauth.secure.pixiv.net/auth/token":
+            response.status_code = 405
+            response._content = b"<html><h1>405 Not Allowed</h1></html>"
+        elif url == "https://www.pixiv.net/":
+            response.status_code = 503
+            response._content = b"<html><h1>Under maintenance</h1>pixiv is currently under maintenance.</html>"
+        else:
+            raise AssertionError("不应请求其他接口")
+        return response
+
+    monkeypatch.setattr(Extractor, "request", request)
+    monkeypatch.setattr(PixivAppAPI, "login", lambda self: self._login_impl(self.username))
+    result = runner.main(["whoami", "--site", "pixiv", "--cookies", str(cookies)])
+    fatal = json.loads(capsys.readouterr().out.splitlines()[-1])
+    assert result == 1
+    assert fatal["ev"] == "fatal"
+    assert fatal["kind"] is None
+    assert "维护" in fatal["msg"]
+
+
 def test_parse_user_id_accepts():
     assert parse_user_id("12345") == "12345"
     assert parse_user_id("https://www.pixiv.net/users/12345") == "12345"
@@ -54,7 +129,7 @@ def test_whoami_missing_refresh_token(tmp_path):
         whoami(str(cookies))
 
 
-def test_whoami_missing_phpsessid(monkeypatch, tmp_path):
+def test_whoami_accepts_token_without_phpsessid(monkeypatch, tmp_path):
     cookies = tmp_path / "cookies.txt"
     cookies.write_text("# Netscape\n")
     (tmp_path / "refresh-token.txt").write_text("tok")
@@ -67,9 +142,14 @@ def test_whoami_missing_phpsessid(monkeypatch, tmp_path):
         cookies = Jar()
         cookies_domain = ".pixiv.net"
 
-    monkeypatch.setattr("sites.pixiv.make_api", lambda _p: (object(), Ext()))
-    with pytest.raises(AuthError, match="PHPSESSID"):
-        whoami(str(cookies))
+    class Api:
+        user = {"id": 12345, "account": "foo", "name": "Foo"}
+
+        def login(self):
+            pass
+
+    monkeypatch.setattr("sites.pixiv.make_api", lambda _p: (Api(), Ext()))
+    assert whoami(str(cookies))["rest_id"] == "12345"
 
 
 def test_whoami_uses_oauth_user(monkeypatch, tmp_path):

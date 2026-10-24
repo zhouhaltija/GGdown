@@ -260,4 +260,21 @@ public class SiteSettingsViewModelTests : IDisposable
         Assert.True(_vm.HasAccount);
         Assert.Contains("有效", _vm.AccountStatusText); // FakeEngine WhoAmI 正常 → 导入即验证通过
     }
+
+    [Fact]
+    public async Task ImportCookie_pixiv_accepts_token_without_cookie_file()
+    {
+        var site = new FakeCurrentSite();
+        await site.SelectAsync("pixiv");
+        using var viewModel = new SiteSettingsViewModel(_settings,
+            new AccountService(new SingleSiteDbContextFactory(_db), _engine, _paths, _sites, NullLogger<AccountService>.Instance),
+            new AccountQueryService(new SingleSiteDbContextFactory(_db)), _sites, new SyncDispatcher(), site);
+        viewModel.PendingRefreshToken = "fictional-token";
+
+        await viewModel.ImportCookieCommand.ExecuteAsync(null);
+
+        Assert.True(viewModel.HasAccount);
+        Assert.Equal("pixiv", viewModel.ActiveAccount!.SiteId);
+        Assert.Null(viewModel.PendingRefreshToken);
+    }
 }

@@ -67,7 +67,7 @@ public sealed partial class SiteSettingsPage : Page
         {
             var siteId = App.Current.Services.GetRequiredService<GGdown.Sites.ICurrentSite>().SiteId;
             var dialog = new ImportCookieDialog(_files, Vm.RequiresRefreshToken) { XamlRoot = App.Current.MainWindow.DialogXamlRoot };
-            if (await dialog.ShowAsync() != ContentDialogResult.Primary || dialog.CookiesPath is null) return;
+            if (await dialog.ShowAsync() != ContentDialogResult.Primary) return;
             if (siteId != App.Current.Services.GetRequiredService<GGdown.Sites.ICurrentSite>().SiteId) return;
             Vm.PendingCookieFile = dialog.CookiesPath;
             Vm.PendingRefreshToken = dialog.RefreshToken;

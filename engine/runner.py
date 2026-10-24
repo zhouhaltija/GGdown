@@ -7,6 +7,7 @@ import os
 import re
 import sys
 import traceback
+from contextlib import nullcontext
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
@@ -42,11 +43,21 @@ class EventOutput:
         pass
 
 
-def create_download_job(base, counters):
+def create_download_job(base, counters, extraction_errors):
     """在 gallery-dl 的最终文件失败钩子计数，重试日志不代表文件失败。"""
     failed_paths = set()
 
     class DownloadJob(base):
+        def dispatch(self, messages):
+            from gallery_dl import exception
+            try:
+                return super().dispatch(messages)
+            except exception.ControlException:
+                raise
+            except Exception as error:
+                extraction_errors[:] = [error]
+                raise
+
         def initialize(self, *args, **kwargs):
             super().initialize(*args, **kwargs)
             self.hooks = dict(self.hooks)
@@ -112,6 +123,9 @@ def cmd_download(args):
     emit_hello()
     with open(args.job, encoding="utf-8") as f:
         spec = json.load(f)
+    if args.site == "twitter":
+        from sites.twitter import validate_cookies
+        validate_cookies(args.cookies)
     options = dict(spec.get("options", {}))
     from rate_limit import SharedRateLimiter, limit_gallery_downloads
     rate_config = options.pop("ggdown-rate-limit", None)
@@ -124,7 +138,8 @@ def cmd_download(args):
     logging.getLogger().addHandler(handler)
     original_select = output.select
     output.select = lambda: EventOutput(counters)
-    download_job = create_download_job(job.DownloadJob, counters)
+    extraction_errors = []
+    download_job = create_download_job(job.DownloadJob, counters, extraction_errors)
     try:
         with SharedRateLimiter(rate_config) as limiter, limit_gallery_downloads(limiter):
             for url in spec["urls"]:
@@ -133,6 +148,8 @@ def cmd_download(args):
                 # run() 返回位标记而非失败文件数；4 表示最终文件下载失败。
                 # 其他提取/格式/网络错误不能在没有完整结果时报告成功。
                 if status and (status & ~4 or counters["failed"] == 0):
+                    if extraction_errors:
+                        raise extraction_errors[-1]
                     raise RuntimeError(f"gallery-dl 未能完成提取（状态码 {status}）")
     finally:
         output.select = original_select
@@ -161,10 +178,16 @@ def main(argv=None):
         emit_hello()
         return 0
     try:
-        {"whoami": cmd_whoami,
-         "list-following": cmd_list_following,
-         "user-info": cmd_user_info,
-         "download": cmd_download}[args.cmd](args)
+        if args.site == "pixiv":
+            from sites.pixiv import guard_login_errors
+            login_guard = guard_login_errors()
+        else:
+            login_guard = nullcontext()
+        with login_guard:
+            {"whoami": cmd_whoami,
+             "list-following": cmd_list_following,
+             "user-info": cmd_user_info,
+             "download": cmd_download}[args.cmd](args)
         return 0
     except AuthError as e:
         emit("fatal", msg=str(e), kind="auth")

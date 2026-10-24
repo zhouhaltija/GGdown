@@ -307,7 +307,8 @@ public partial class SiteSettingsViewModel : StatusViewModel, IDisposable
         var siteId = SiteId;
         var cookieFile = PendingCookieFile;
         var refreshToken = PendingRefreshToken;
-        if (string.IsNullOrEmpty(cookieFile)) return;
+        if (string.IsNullOrWhiteSpace(cookieFile)
+            && !(RequiresRefreshToken && !string.IsNullOrWhiteSpace(refreshToken))) return;
         try
         {
             var result = await _accounts.ImportCookiesAsync(siteId, cookieFile, refreshToken);

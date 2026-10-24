@@ -244,7 +244,9 @@ def test_gallery_and_douyin_network_transfers_share_total_limit(tmp_path):
     url = f"http://127.0.0.1:{server.server_port}/video.mp4"
     engine_dir = Path(__file__).resolve().parents[1]
     cookies = tmp_path / "cookies.txt"
-    cookies.write_text("# Netscape HTTP Cookie File\n", encoding="utf-8")
+    cookies.write_text("# Netscape HTTP Cookie File\n"
+                       ".x.com\tTRUE\t/\tTRUE\t2147483647\tauth_token\tfictional-token\n",
+                       encoding="utf-8")
     job = tmp_path / "job.json"
     job.write_text(json.dumps({
         "urls": [url], "options": {

@@ -94,4 +94,35 @@ public class PixivSiteProviderTests
         Assert.Contains(_site.OptionsSchema.Fields, f => f.Key == "ugoira");
         Assert.Contains(_site.OptionsSchema.Fields, f => f.Key == "novel_covers");
     }
+
+    [Theory]
+    [InlineData(ContentKind.UserNovels)]
+    [InlineData(ContentKind.AccountNovelBookmarks)]
+    public void BuildDownload_novels_default_to_title_independently_of_artwork_template(ContentKind kind)
+    {
+        var options = new Dictionary<string, object?> { ["filename"] = "art_{id}.{extension}" };
+        var plan = _site.BuildDownload(kind, new UserTarget(7, "12345", @"D:\dl"),
+            options, new DownloadPaths("cookies.txt", "archive.txt"));
+        var extractors = (IReadOnlyDictionary<string, object?>)plan.Options["extractor"]!;
+        var novel = (IReadOnlyDictionary<string, object?>)extractors["pixiv-novel"]!;
+        var artwork = (IReadOnlyDictionary<string, object?>)extractors["pixiv"]!;
+
+        Assert.Equal("{title} [{id}]{suffix}.{extension}", novel["filename"]);
+        Assert.Equal("art_{id}.{extension}", artwork["filename"]);
+    }
+
+    [Fact]
+    public void BuildDownload_novel_template_can_be_customized()
+    {
+        var options = new Dictionary<string, object?>(_site.DefaultOptions)
+        {
+            ["novel_filename"] = "{title}_{id}{suffix}.{extension}",
+        };
+        var plan = _site.BuildDownload(ContentKind.UserNovels, new UserTarget(7, "12345", @"D:\dl"),
+            options, new DownloadPaths("cookies.txt", "archive.txt"));
+        var extractors = (IReadOnlyDictionary<string, object?>)plan.Options["extractor"]!;
+        var novel = (IReadOnlyDictionary<string, object?>)extractors["pixiv-novel"]!;
+
+        Assert.Equal("{title}_{id}{suffix}.{extension}", novel["filename"]);
+    }
 }

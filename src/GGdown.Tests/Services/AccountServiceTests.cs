@@ -88,6 +88,34 @@ public class AccountServiceTests : IDisposable
     }
 
     [Fact]
+    public async Task Import_pixiv_with_token_only_creates_account_and_credential_files()
+    {
+        var svc = new AccountService(new SingleSiteDbContextFactory(_t.Item2), _engine, _paths,
+            new SiteRegistry([new PixivSiteProvider()]), NullLogger<AccountService>.Instance);
+
+        var result = await svc.ImportCookiesAsync("pixiv", null, "fictional-token");
+
+        Assert.True(result.Ok);
+        Assert.Equal(AccountStatus.Ok, result.Account.Status);
+        var cookiesPath = AccountService.AbsoluteCookiePath(_paths, result.Account);
+        Assert.StartsWith("# Netscape HTTP Cookie File", await File.ReadAllTextAsync(cookiesPath));
+        Assert.Equal("fictional-token", await File.ReadAllTextAsync(
+            Path.Combine(Path.GetDirectoryName(cookiesPath)!, "refresh-token.txt")));
+    }
+
+    [Fact]
+    public async Task Import_twitter_without_cookies_does_not_change_existing_account()
+    {
+        var original = await _svc.ImportCookiesAsync("twitter", MakeCookiesFile());
+
+        var result = await _svc.ImportCookiesAsync("twitter", null, "fictional-token");
+
+        Assert.False(result.Ok);
+        var active = await _t.Item2.Accounts.AsNoTracking().SingleAsync(account => account.IsActive);
+        Assert.Equal(original.Account.Id, active.Id);
+    }
+
+    [Fact]
     public async Task Import_with_invalid_cookie_marks_Invalid()
     {
         _engine.WhoAmIError = new AuthException("cookie 无效");

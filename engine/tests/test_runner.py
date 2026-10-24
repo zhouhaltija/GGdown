@@ -8,7 +8,17 @@ import pytest
 import json
 
 
-def test_diagnostic_error_log_does_not_count_as_a_failed_file(tmp_path, monkeypatch, capsys):
+@pytest.fixture
+def twitter_cookies(tmp_path):
+    cookies = tmp_path / "cookies.txt"
+    cookies.write_text("# Netscape HTTP Cookie File\n"
+                       ".x.com\tTRUE\t/\tTRUE\t2147483647\tauth_token\tfictional-token\n",
+                       encoding="utf-8")
+    return cookies
+
+
+def test_diagnostic_error_log_does_not_count_as_a_failed_file(tmp_path, monkeypatch, capsys,
+                                                           twitter_cookies):
     import logging
     import runner
     from argparse import Namespace
@@ -24,14 +34,14 @@ def test_diagnostic_error_log_does_not_count_as_a_failed_file(tmp_path, monkeypa
     monkeypatch.setattr(job.DownloadJob, "run", diagnostic_only)
     handlers = list(logging.getLogger().handlers)
     try:
-        runner.cmd_download(Namespace(site="twitter", cookies="cookies.txt", job=str(spec)))
+        runner.cmd_download(Namespace(site="twitter", cookies=str(twitter_cookies), job=str(spec)))
     finally:
         logging.getLogger().handlers[:] = handlers
     events = [json.loads(line) for line in capsys.readouterr().out.splitlines()]
     assert events[-1] == {"ev": "job-done", "total": 0, "skipped": 0, "failed": 0}
 
 
-def test_gallery_file_failure_is_structured_and_not_counted_per_log(tmp_path):
+def test_gallery_file_failure_is_structured_and_not_counted_per_log(tmp_path, twitter_cookies):
     import subprocess
     import threading
     from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -65,7 +75,7 @@ def test_gallery_file_failure_is_structured_and_not_counted_per_log(tmp_path):
     try:
         env = dict(os.environ, ALL_PROXY="", HTTPS_PROXY="", HTTP_PROXY="")
         result = subprocess.run([sys.executable, str(Path(__file__).resolve().parents[1] / "runner.py"),
-                                 "download", "--cookies", str(tmp_path / "cookies"), "--job", str(spec)],
+                                 "download", "--cookies", str(twitter_cookies), "--job", str(spec)],
                                 capture_output=True, text=True, encoding="utf-8", timeout=15, env=env)
     finally:
         server.shutdown()
@@ -82,7 +92,7 @@ def test_gallery_file_failure_is_structured_and_not_counted_per_log(tmp_path):
     assert events[-1] == {"ev": "job-done", "total": 2, "skipped": 0, "failed": 1}
 
 
-def test_gallery_non_file_failure_is_not_reported_as_success(tmp_path, monkeypatch):
+def test_gallery_non_file_failure_is_not_reported_as_success(tmp_path, monkeypatch, twitter_cookies):
     import runner
     from argparse import Namespace
     from gallery_dl import job
@@ -91,7 +101,66 @@ def test_gallery_non_file_failure_is_not_reported_as_success(tmp_path, monkeypat
     spec.write_text(json.dumps({"urls": ["https://example.com/test.jpg"]}), encoding="utf-8")
     monkeypatch.setattr(job.DownloadJob, "run", lambda self: 1)
     with pytest.raises(RuntimeError):
-        runner.cmd_download(Namespace(site="twitter", cookies="cookies.txt", job=str(spec)))
+        runner.cmd_download(Namespace(site="twitter", cookies=str(twitter_cookies), job=str(spec)))
+
+
+@pytest.mark.parametrize("site,error_name,message,kind", [
+    ("pixiv", "AuthenticationError", "Invalid refresh token", "auth"),
+    ("twitter", "AuthorizationError", "Tweets are protected", None),
+    ("twitter", "AuthorizationError", "Could not authenticate you", "auth"),
+])
+@pytest.mark.parametrize("nested", [False, True])
+def test_gallery_extraction_failure_preserves_cause(tmp_path, monkeypatch, capsys, twitter_cookies,
+                                                 site, error_name, message, kind, nested):
+    import runner
+    from gallery_dl import config, exception, extractor
+    from gallery_dl.extractor.common import Extractor, Message
+
+    class FailingExtractor(Extractor):
+        category = site
+        subcategory = "test"
+        pattern = r"https://example.com/(test|child)"
+
+        def items(self):
+            if nested and self.groups[0] == "test":
+                yield Message.Queue, "https://example.com/child", {"_extractor": FailingExtractor}
+                return
+            raise getattr(exception, error_name)(message)
+            yield
+
+    config.clear()
+    monkeypatch.setattr(extractor, "find", FailingExtractor.from_url)
+    spec = tmp_path / "job.json"
+    spec.write_text(json.dumps({"urls": ["https://example.com/test"]}), encoding="utf-8")
+    runner.main(["download", "--site", site, "--cookies", str(twitter_cookies),
+                 "--job", str(spec)])
+    events = [json.loads(line) for line in capsys.readouterr().out.splitlines()]
+    fatal = events[-1]
+    assert fatal["ev"] == "fatal"
+    assert message in fatal["msg"]
+    assert fatal["kind"] == kind
+    assert not any(event["ev"] == "job-done" for event in events)
+
+
+def test_corrupt_twitter_cookies_fail_before_extraction(tmp_path, monkeypatch, capsys):
+    import runner
+    from gallery_dl import extractor
+
+    cookies = tmp_path / "cookies.txt"
+    cookies.write_bytes(b"\x00" * 128)
+    spec = tmp_path / "job.json"
+    spec.write_text(json.dumps({"urls": ["https://x.com/example/media"]}), encoding="utf-8")
+
+    def unexpected_extraction(url):
+        raise AssertionError("损坏的 Cookie 不应发起提取")
+
+    monkeypatch.setattr(extractor, "find", unexpected_extraction)
+    runner.main(["download", "--site", "twitter", "--cookies", str(cookies), "--job", str(spec)])
+    fatal = json.loads(capsys.readouterr().out.splitlines()[-1])
+    assert fatal["ev"] == "fatal"
+    assert fatal["kind"] == "auth"
+    assert "Cookie" in fatal["msg"]
+    assert "\\u0000" not in fatal["msg"]
 
 
 def test_load_site_twitter():
