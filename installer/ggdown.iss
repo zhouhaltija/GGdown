@@ -1,8 +1,10 @@
 ; GGdown 安装器（Inno Setup 6/7），安装到当前用户目录。
 ; 构建入口传入版本、仓库和发行目录。
 
+; 版本号由 scripts/build.ps1 传入（它读仓库根目录的 VERSION）。
+; 这里不给默认值：直接编译本文件会得到 1.0.0 之类的假版本号，宁可报错。
 #ifndef AppVersion
-#define AppVersion "1.0.0"
+#error 请通过 scripts/build.ps1 构建安装包：版本号取自仓库根目录 VERSION
 #endif
 
 #ifndef AppNumericVersion

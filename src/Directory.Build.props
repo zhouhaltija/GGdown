@@ -3,5 +3,11 @@
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
     <LangVersion>latest</LangVersion>
+    <!--
+      版本号的唯一来源是仓库根目录的 VERSION。
+      发行构建用 -p:Version 覆盖（发布工作流按 tag 传入），日常 dotnet build 直接读这里，
+      避免「关于」页与安装包各显示一套版本号。
+    -->
+    <Version>$([System.IO.File]::ReadAllText('$(MSBuildThisFileDirectory)..\VERSION').Trim())</Version>
   </PropertyGroup>
 </Project>

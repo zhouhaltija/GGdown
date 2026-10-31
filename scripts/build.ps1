@@ -1,13 +1,25 @@
 # 完整发行构建：引擎、独立运行的 WinUI 应用、许可证和 Inno Setup 安装包。
 [CmdletBinding()]
 param(
-    [string]$AppVersion = '1.0.0',
+    [string]$AppVersion = '',
     [string]$OutputDirectory = 'dist',
     [switch]$SkipInstaller
 )
 
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
+$repoRoot = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..'))
+# 版本号的唯一来源是仓库根目录的 VERSION；-AppVersion 只用于临时覆盖
+# （发布工作流按 tag 传入，避免 tag 与 VERSION 不一致时产物名对不上）。
+if (-not $AppVersion) {
+    $versionFile = Join-Path $repoRoot 'VERSION'
+    if (-not (Test-Path -LiteralPath $versionFile)) {
+        throw '未找到 VERSION 文件：请在仓库根目录创建 VERSION，或用 -AppVersion 指定版本号'
+    }
+    $rawVersion = Get-Content -LiteralPath $versionFile -Raw
+    $AppVersion = if ($null -eq $rawVersion) { '' } else { $rawVersion.Trim() }
+    if (-not $AppVersion) { throw 'VERSION 文件为空，请写入 x.y.z 或 x.y.z-rc.1' }
+}
 if ($AppVersion -notmatch '^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(-[0-9A-Za-z]+(?:[.-][0-9A-Za-z]+)*)?$') {
     throw '版本号须为 x.y.z 或 x.y.z-rc.1；不要包含 v 前缀'
 }
@@ -15,7 +27,7 @@ $numericVersion = ($AppVersion -split '-')[0]
 foreach ($part in $numericVersion.Split('.')) {
     if ([long]$part -gt 65534) { throw '版本号每段不能超过 65534' }
 }
-$repoRoot = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..'))
+Write-Host "构建版本：$AppVersion"
 $distDir = [IO.Path]::TrimEndingDirectorySeparator([IO.Path]::GetFullPath((Join-Path $repoRoot $OutputDirectory)))
 if (-not $distDir.StartsWith($repoRoot + [IO.Path]::DirectorySeparatorChar, [StringComparison]::OrdinalIgnoreCase)) {
     throw '输出目录必须位于仓库内的子目录'

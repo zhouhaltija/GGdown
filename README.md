@@ -79,24 +79,30 @@ uv run --project engine --locked python -m pytest engine/tests -q
 另外安装 [Inno Setup 6 或 7](https://jrsoftware.org/isinfo.php)，然后运行：
 
 ```powershell
-pwsh scripts/build.ps1 -AppVersion 1.0.0
+pwsh scripts/build.ps1
+```
+
+版本号来自仓库根目录的 `VERSION`（唯一来源：`scripts/build.ps1` 读它，`Directory.Build.props` 也读它，所以调试构建的「关于」页与安装包不会各显示一套版本号）。需要临时打别的版本时用 `-AppVersion` 覆盖：
+
+```powershell
+pwsh scripts/build.ps1 -AppVersion 0.2.0-rc.1
 ```
 
 生成：
 
 ```text
 dist/
-├── app/                          # 独立运行的 Release x64 应用
-├── engine/                       # Python 3.13.7、依赖和下载适配器
-├── licenses/                     # 项目与第三方许可证
-├── GGdown-Setup-1.0.0.exe         # 安装包
-└── GGdown-Setup-1.0.0.exe.sha256  # SHA-256 校验值
+├── app/                                  # 独立运行的 Release x64 应用
+├── engine/                               # Python 3.13.7、依赖和下载适配器
+├── licenses/                             # 项目与第三方许可证
+├── GGdown-Setup-<VERSION>.exe            # 安装包
+└── GGdown-Setup-<VERSION>.exe.sha256     # SHA-256 校验值
 ```
 
 构建会重新生成 `dist/`。依赖使用锁文件及其哈希，抖音源码固定到指定提交。只验证应用与引擎、暂不编译安装包时，可使用 `-SkipInstaller`；验证输出也可指定为 `.cache` 下的目录：
 
 ```powershell
-pwsh scripts/build.ps1 -AppVersion 1.0.0 -SkipInstaller -OutputDirectory .cache/release-check
+pwsh scripts/build.ps1 -SkipInstaller -OutputDirectory .cache/release-check
 ```
 
 ## CI/CD 与 tag 发布
@@ -123,6 +129,8 @@ git push origin HEAD
 git tag -a v1.0.0 -m "发布 GGdown 1.0.0"
 git push origin v1.0.0
 ```
+
+发布前把仓库根目录的 `VERSION` 改成与 tag 相同的版本号并一起提交（tag 去掉 `v` 前缀），否则本地打包与 CI 产物的版本号会不一致；CI 构建时以 tag 为准。
 
 前往 **Actions → Windows Release** 查看构建进度。成功后，安装包出现在 [Releases](https://github.com/zhouhaltija/gallery-gui/releases)。构建 job 同时保留 `windows-installer` Artifact，便于在发布上传失败时取回产物。
 
