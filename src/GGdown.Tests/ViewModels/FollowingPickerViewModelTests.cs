@@ -1,3 +1,4 @@
+using System.Collections.Specialized;
 using GGdown.Data;
 using GGdown.Engine;
 using GGdown.Paths;
@@ -151,6 +152,22 @@ public class FollowingPickerViewModelTests : IDisposable
         Assert.Empty(_vm.VisibleItems);
         _vm.SelectedFilterIndex = 0;
         Assert.Equal(["alice", "bob"], _vm.VisibleItems.Select(r => r.Info.ScreenName));
+    }
+
+    [Fact]
+    public async Task Ignore_updates_visible_rows_without_resetting_the_list()
+    {
+        Assert.True(await _vm.LoadAsync());
+        var alice = _vm.VisibleItems.Single(r => r.Info.RestId == "1");
+        var bob = _vm.VisibleItems.Single(r => r.Info.RestId == "2");
+
+        var actions = new List<NotifyCollectionChangedAction>();
+        _vm.VisibleItems.CollectionChanged += (_, e) => actions.Add(e.Action);
+
+        await bob.ToggleIgnoreCommand.ExecuteAsync(null);
+
+        Assert.Equal([NotifyCollectionChangedAction.Remove], actions);
+        Assert.Same(alice, Assert.Single(_vm.VisibleItems));
     }
 
     [Fact]

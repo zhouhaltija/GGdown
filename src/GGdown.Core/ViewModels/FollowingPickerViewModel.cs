@@ -294,10 +294,30 @@ public partial class FollowingPickerViewModel : ObservableObject
                 r.Info.ScreenName.Contains(q, StringComparison.OrdinalIgnoreCase) ||
                 (r.Info.DisplayName?.Contains(q, StringComparison.OrdinalIgnoreCase) ?? false));
         }
-        VisibleItems.Clear();
-        foreach (var row in rows)
-            VisibleItems.Add(row);
+        SyncVisible(rows.ToList());
         NotifySelection();
+    }
+
+    /// <summary>
+    /// 增量同步可见列表：只增删差异项，避免 Clear() 的 Reset 通知让 ListView 滚回顶部。
+    /// </summary>
+    private void SyncVisible(IReadOnlyList<FollowingRowViewModel> desired)
+    {
+        var keep = new HashSet<FollowingRowViewModel>(desired);
+        for (var i = VisibleItems.Count - 1; i >= 0; i--)
+        {
+            if (!keep.Contains(VisibleItems[i]))
+                VisibleItems.RemoveAt(i);
+        }
+        for (var i = 0; i < desired.Count; i++)
+        {
+            if (i < VisibleItems.Count && ReferenceEquals(VisibleItems[i], desired[i])) continue;
+            VisibleItems.Insert(i, desired[i]);
+        }
+        if (VisibleItems.SequenceEqual(desired)) return;
+        VisibleItems.Clear();
+        foreach (var row in desired)
+            VisibleItems.Add(row);
     }
 
     private async Task ToggleIgnoreAsync(FollowingRowViewModel row)
