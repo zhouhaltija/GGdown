@@ -51,13 +51,18 @@ public static class TestPaths
     }
 
     /// <summary>
-    /// 清理临时数据目录。先清空 SQLite 连接池释放文件句柄，再重试几次：
-    /// 后台任务收尾时仍可能短暂持有 db 文件，清理失败不该变成测试失败（目录留在 %TEMP% 由系统回收）。
+    /// 清理临时数据目录，重试几次再放弃：用例失败时后台写入线程可能还开着 db 连接，
+    /// 清理失败不该变成测试失败（目录留在 %TEMP% 由系统回收）。
+    /// <para>
+    /// 不要在这里调 <c>SqliteConnection.ClearAllPools()</c>：它是进程级的，会和并行测试集合里
+    /// 正在关闭的连接抢同一份池集合，抛 <c>InvalidOperationException: Collection was modified</c>
+    /// （CI 上已复现，把 UsersViewModelTests 带崩）。站点库建连本就带 <c>Pooling=False</c>
+    /// （见 SiteDbContextFactory），没有池化句柄需要清理。
+    /// </para>
     /// </summary>
     public static void Delete(GGdown.Paths.AppPaths paths)
     {
         if (!Directory.Exists(paths.Root)) return;
-        SqliteConnection.ClearAllPools();
         for (var attempt = 1; attempt <= 5; attempt++)
         {
             try
