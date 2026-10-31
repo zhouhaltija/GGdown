@@ -942,4 +942,38 @@ public class UsersViewModelTests : IDisposable
         await _vm.IncrementalDownloadCommand.ExecuteAsync(null);
         Assert.Equal("没有下载次数大于 0 的用户", _vm.StatusMessage);
     }
+
+    [Fact]
+    public async Task IncrementalDownload_asks_before_enqueuing_many_users()
+    {
+        _db.Users.AddRange(Enumerable.Range(20, 5)
+            .Select(i => NewUser(i.ToString(), $"bulk-{i}", count: 1, last: DateTime.UtcNow.AddDays(-1))));
+        await _db.SaveChangesAsync();
+        await _vm.RefreshCommand.ExecuteAsync(null);
+
+        var asked = 0;
+        _vm.ConfirmBulkDownloadAsync = count => { asked = count; return Task.FromResult(false); };
+        await _vm.IncrementalDownloadCommand.ExecuteAsync(null);
+
+        Assert.Equal(6, asked); // alice + 5 个批量用户
+        Assert.Empty(await _db.Jobs.ToListAsync());
+        Assert.Equal("已取消批量下载", _vm.StatusMessage);
+
+        _vm.ConfirmBulkDownloadAsync = _ => Task.FromResult(true);
+        await _vm.IncrementalDownloadCommand.ExecuteAsync(null);
+        Assert.Equal(6, (await _db.Jobs.ToListAsync()).Select(j => j.UserId).Distinct().Count());
+    }
+
+    [Fact]
+    public async Task IncrementalDownload_below_threshold_does_not_ask()
+    {
+        await _vm.RefreshCommand.ExecuteAsync(null);
+        var asked = false;
+        _vm.ConfirmBulkDownloadAsync = _ => { asked = true; return Task.FromResult(true); };
+
+        await _vm.IncrementalDownloadCommand.ExecuteAsync(null);
+
+        Assert.False(asked);
+        Assert.Contains("已加入增量下载队列（1 个用户）", _vm.StatusMessage);
+    }
 }

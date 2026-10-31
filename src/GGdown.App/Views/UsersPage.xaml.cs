@@ -35,6 +35,7 @@ public sealed partial class UsersPage : Page
         Vm.ShowFollowingListRequested += OnShowFollowingListRequested;
         Vm.EditUserDateRequested += OnEditUserDateRequested;
         Vm.ConfirmDeleteAsync = ConfirmDeleteAsync;
+        Vm.ConfirmBulkDownloadAsync = ConfirmBulkDownloadAsync;
     }
 
     private async void OnShowSingleVideoDownloadRequested()
@@ -60,6 +61,22 @@ public sealed partial class UsersPage : Page
             Title = count == 1 ? "删除这个用户？" : $"删除 {count} 个用户？",
             Content = "将从列表中移除，已下载到磁盘的文件不会被删除。",
             PrimaryButtonText = "删除",
+            CloseButtonText = "取消",
+            DefaultButton = ContentDialogButton.Close,
+        };
+        return await dialog.ShowAsync() == ContentDialogResult.Primary;
+    }
+
+    // 批量下载确认：整平台一键入队（增量下载/下载未下载用户）人数较多时先问一句，
+    // 避免误点工具栏后一次性排进上百个任务。
+    private async Task<bool> ConfirmBulkDownloadAsync(int count)
+    {
+        var dialog = new ContentDialog
+        {
+            XamlRoot = App.Current.MainWindow.DialogXamlRoot,
+            Title = $"为 {count} 个用户加入下载队列？",
+            Content = "每个用户都会各自拉取一遍作品，可能需要较长时间；已下载过的文件会自动跳过。",
+            PrimaryButtonText = "开始下载",
             CloseButtonText = "取消",
             DefaultButton = ContentDialogButton.Close,
         };

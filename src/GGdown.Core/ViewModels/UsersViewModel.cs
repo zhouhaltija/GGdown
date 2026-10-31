@@ -306,6 +306,15 @@ public partial class UsersViewModel : StatusViewModel, IDisposable
     /// </summary>
     public Func<int, Task<bool>>? ConfirmDeleteAsync { get; set; }
 
+    /// <summary>
+    /// 批量下载确认：整平台一键入队（增量下载/下载未下载用户）超过 <see cref="BulkDownloadConfirmThreshold"/>
+    /// 人时先问一句。未注入（单元测试）时不拦截。
+    /// </summary>
+    public Func<int, Task<bool>>? ConfirmBulkDownloadAsync { get; set; }
+
+    /// <summary>超过这个人数才弹确认，避免给常规小批量加摩擦。</summary>
+    public const int BulkDownloadConfirmThreshold = 5;
+
     [ObservableProperty]
     private string? _searchText;
 
@@ -575,7 +584,8 @@ public partial class UsersViewModel : StatusViewModel, IDisposable
             }
         }
 
-        if (await DownloadUsersAsync(candidates, isIncremental: true) && selected.Count > 0)
+        if (await DownloadUsersAsync(candidates, isIncremental: true, confirmBulk: selected.Count == 0)
+            && selected.Count > 0)
             foreach (var row in selected) row.IsSelected = false;
     }
 
@@ -592,7 +602,7 @@ public partial class UsersViewModel : StatusViewModel, IDisposable
                 StatusMessage = "没有未下载过的用户";
                 return;
             }
-            await DownloadUsersAsync(candidates);
+            await DownloadUsersAsync(candidates, confirmBulk: true);
         }
         catch (Exception ex)
         {
@@ -629,7 +639,7 @@ public partial class UsersViewModel : StatusViewModel, IDisposable
     private Task DownloadHighlightsAsync(UserRowViewModel row) => DownloadUsersAsync([row.Model], ContentKind.UserHighlights, requestSiteId: row.SiteId);
 
     /// <returns>true：入队完成或全部被跳过（可清选中）；false：硬失败，保留勾选以便重试。</returns>
-    private async Task<bool> DownloadUsersAsync(IReadOnlyList<User> users, ContentKind? onlyKind = null, bool isIncremental = false, string? requestSiteId = null)
+    private async Task<bool> DownloadUsersAsync(IReadOnlyList<User> users, ContentKind? onlyKind = null, bool isIncremental = false, string? requestSiteId = null, bool confirmBulk = false)
     {
         var siteId = requestSiteId ?? users.FirstOrDefault()?.SiteId ?? SiteId;
         if (!SiteCatalog.Get(siteId).Available)
@@ -654,6 +664,14 @@ public partial class UsersViewModel : StatusViewModel, IDisposable
                         ? $"{targetPrefix}用户均已跳过或已在下载队列"
                         : $"{targetPrefix}用户均已设为跳过");
             return true;
+        }
+
+        // 一键入队可能一次排上百个用户：超过阈值先确认，避免误点后开始大规模下载。
+        if (confirmBulk && toDownload.Count > BulkDownloadConfirmThreshold
+            && ConfirmBulkDownloadAsync is { } confirm && !await confirm(toDownload.Count))
+        {
+            SetSiteStatus(siteId, "已取消批量下载");
+            return false;
         }
 
         Account? account;

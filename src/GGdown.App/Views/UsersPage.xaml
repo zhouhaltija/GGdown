@@ -44,7 +44,7 @@
                     </SplitButton.Flyout>
                 </SplitButton>
                 <Button Command="{x:Bind Vm.IncrementalDownloadCommand}"
-                        ToolTipService.ToolTip="为下载过的用户拉取新作品；有勾选时只处理勾选的用户"
+                        ToolTipService.ToolTip="为下载过的用户拉取新作品；有勾选时只处理勾选的用户。人数较多时会先确认"
                         Visibility="{x:Bind conv:UiConv.ToVisibility(Vm.SupportsIncrementalDownload), Mode=OneWay}">
                     <StackPanel Orientation="Horizontal" Spacing="6">
                         <FontIcon Glyph="&#xE896;" FontSize="14"/>
@@ -59,7 +59,7 @@
                     </StackPanel>
                 </Button>
                 <Button Content="下载未下载用户" Command="{x:Bind Vm.DownloadNeverDownloadedCommand}"
-                        ToolTipService.ToolTip="下载当前平台所有下载次数为 0 的用户；已跳过和下载中的用户会略过"/>
+                        ToolTipService.ToolTip="下载当前平台所有下载次数为 0 的用户；已跳过和下载中的用户会略过。人数较多时会先确认"/>
                 <DropDownButton Content="选择" AutomationProperties.Name="选择">
                     <DropDownButton.Flyout>
                         <MenuFlyout Placement="BottomEdgeAlignedLeft">
