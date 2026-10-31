@@ -25,7 +25,7 @@ public sealed class QueueReliabilityTests : IDisposable
         db.SaveChanges();
     }
 
-    public void Dispose() => Directory.Delete(_paths.Root, true);
+    public void Dispose() => TestPaths.Delete(_paths);
 
     private DownloadQueueService Queue(FakeEngine engine, StatsAggregator? stats = null) =>
         new(_factory, engine, stats ?? new StatsAggregator(_factory), _paths,
@@ -41,9 +41,13 @@ public sealed class QueueReliabilityTests : IDisposable
         return Task.CompletedTask;
     }};
 
-    private static async Task Drain(DownloadQueueService queue)
+    /// <summary>
+    /// 等待队列清空。CI 磁盘慢时 2500 条文件记录落库可能远超 10 秒，这里给足余量；
+    /// 真出问题时只是多等一会儿，不会把慢当成失败。
+    /// </summary>
+    private static async Task Drain(DownloadQueueService queue, int seconds = 60)
     {
-        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(seconds));
         while (queue.Active.Count != 0) await Task.Delay(10, timeout.Token);
     }
 

@@ -49,6 +49,29 @@ public static class TestPaths
         p.EnsureCreated();
         return p;
     }
+
+    /// <summary>
+    /// 清理临时数据目录。先清空 SQLite 连接池释放文件句柄，再重试几次：
+    /// 后台任务收尾时仍可能短暂持有 db 文件，清理失败不该变成测试失败（目录留在 %TEMP% 由系统回收）。
+    /// </summary>
+    public static void Delete(GGdown.Paths.AppPaths paths)
+    {
+        if (!Directory.Exists(paths.Root)) return;
+        SqliteConnection.ClearAllPools();
+        for (var attempt = 1; attempt <= 5; attempt++)
+        {
+            try
+            {
+                Directory.Delete(paths.Root, true);
+                return;
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+            {
+                if (attempt == 5) return;
+                Thread.Sleep(100 * attempt);
+            }
+        }
+    }
 }
 
 public sealed class FakeEngine : IDownloadEngine
